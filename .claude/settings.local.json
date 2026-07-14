@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//tmp/logo_work/**)",
+      "Read(//private/tmp/logo_work/**)"
+    ]
+  }
+}
