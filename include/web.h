@@ -612,6 +612,18 @@ button.relay-btn {
   color: var(--text);
 }
 
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.checkbox-label input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent);
+}
+
 .update-block {
   padding: 14px 0;
   border-bottom: 1px solid var(--border);
