@@ -857,6 +857,7 @@ if (wifiForm) wifiForm.addEventListener('submit', (e) => { e.preventDefault(); s
 if (authForm) authForm.addEventListener('submit', (e) => { e.preventDefault(); submitSettings(authForm); });
 
 const algorithmForm = document.getElementById('algorithmForm');
+const di7OnCheckbox = document.getElementById('di7On');
 const presenceOffDelayInput = document.getElementById('presenceOffDelaySec');
 const algorithmResetBtn = document.getElementById('algorithmResetBtn');
 const algorithmMsg = document.getElementById('algorithmMsg');
@@ -864,6 +865,7 @@ const algorithmMsg = document.getElementById('algorithmMsg');
 async function loadAlgorithmSettings() {
   const res = await fetch('/api/settings/algorithm');
   const data = await res.json();
+  if (di7OnCheckbox) di7OnCheckbox.checked = data.di7On;
   if (presenceOffDelayInput) presenceOffDelayInput.value = data.presenceOffDelaySec;
 }
 
@@ -873,6 +875,7 @@ if (algorithmForm) {
   algorithmForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     const params = new URLSearchParams();
+    params.append('di7_on', di7OnCheckbox.checked ? '1' : '0');
     params.append('presence_off_delay_sec', presenceOffDelayInput.value);
     await fetch('/api/settings/algorithm', {
       method: 'POST',
