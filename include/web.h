@@ -2,13 +2,12 @@
 
 #include <Arduino.h>
 
-static uint8_t fw_ver[3] = {1, 1, 0};	// Версия прошивки
+static uint8_t fw_ver[3] = {1, 2, 0};	// Версия прошивки
 
 #define WEB_SERVER_PORT 80
 
 #define API_PATH_STATUS "/api/status"
-#define API_PATH_VERSION "/api/version"
-#define API_PATH_RUNTIME "/api/runtime"
+#define API_PATH_INFO "/api/info"
 #define API_PATH_RELAY "/api/relay"
 #define API_PATH_ANALOG "/api/analog"
 #define API_PATH_SETTINGS "/api/settings"
@@ -51,6 +50,18 @@ static uint8_t fw_ver[3] = {1, 1, 0};	// Версия прошивки
 </nav>
 )navblk"
 
+// Урезанная шапка для страницы "Инфо", когда смотрят БЕЗ авторизации — видны только Инфо и
+// Вход, остальные разделы требуют логина и в меню не показываются, пока не вошли.
+#define PAGE_HEADER_PUBLIC R"navpub(<header class="brand">
+<img class="brand-logo" src=")navpub" LOGO_DATA_URI R"navpub(" alt="MLSystems" />
+<div class="brand-text"><span class="brand-name">MLSystems</span><span class="brand-tagline">Панель управления</span></div>
+</header>
+<nav class="topnav">
+<a href="/info" class="navlink" data-path="/info"><svg class="navicon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg><span>Инфо</span></a>
+<a href="/login" class="navlink" data-path="/login"><svg class="navicon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"></path><path d="M10 17l5-5-5-5"></path><path d="M15 12H3"></path></svg><span>Вход</span></a>
+</nav>
+)navpub"
+
 static const char LOGIN_HTML[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
 <html lang="ru">
@@ -82,6 +93,59 @@ static const char LOGIN_HTML[] PROGMEM = R"rawliteral(
 </html>
 )rawliteral";
 
+// Содержимое страницы "Инфо" — общее и для авторизованного, и для публичного варианта,
+// отличается только шапка/меню (PAGE_HEADER / PAGE_HEADER_PUBLIC), с которой оно склеивается
+// ниже. Один источник правды, чтобы правки полей не расходились между двумя копиями.
+#define INFO_BODY R"infobody(
+  <main>
+    <section class="panel">
+      <h2>Наработка</h2>
+      <div class="settings-table info-table">
+        <div class="settings-label">Время работы</div>
+        <div class="settings-control" id="runtimeText">Загрузка...</div>
+
+        <div class="settings-label">Полных циклов</div>
+        <div class="settings-control" id="fullCycles">—</div>
+
+        <div class="settings-label">Неполных циклов</div>
+        <div class="settings-control" id="partialCycles">—</div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Сеть</h2>
+      <div class="settings-table info-table">
+        <div class="settings-label">Ethernet — MAC</div>
+        <div class="settings-control" id="ethMac">—</div>
+
+        <div class="settings-label">Ethernet — IP</div>
+        <div class="settings-control" id="ethIp">—</div>
+
+        <div class="settings-label">Wi-Fi — MAC</div>
+        <div class="settings-control" id="wifiMac">—</div>
+
+        <div class="settings-label">Wi-Fi — IP</div>
+        <div class="settings-control" id="wifiIp">—</div>
+
+        <div class="settings-label">Точка доступа — MAC</div>
+        <div class="settings-control" id="apMac">—</div>
+
+        <div class="settings-label">Точка доступа — IP</div>
+        <div class="settings-control" id="apIp">—</div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="settings-table info-table">
+        <div class="settings-label">Версия прошивки</div>
+        <div class="settings-control" id="fwVer">—</div>
+      </div>
+    </section>
+  </main>
+
+  <script src="/script.js"></script>
+)infobody"
+
 static const char INFO_HTML[] PROGMEM = R"page(
 <!DOCTYPE html>
 <html lang="ru">
@@ -92,25 +156,25 @@ static const char INFO_HTML[] PROGMEM = R"page(
   <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
-)page" PAGE_HEADER R"page(
-  <main>
-    <section class="panel">
-      <h2>Наработка</h2>
-      <p id="runtimeText">Загрузка...</p>
-    </section>
+)page" PAGE_HEADER INFO_BODY R"page(
+</body>
+</html>
+)page";
 
-    <section class="panel">
-      <h2>Циклы</h2>
-      <p>Полных циклов: <span id="fullCycles">—</span></p>
-      <p>Неполных циклов: <span id="partialCycles">—</span></p>
-    </section>
-
-    <section class="panel">
-      <p>Версия прошивки: <span id="fwVer"></span></p>
-    </section>
-  </main>
-
-  <script src="/script.js"></script>
+// Та же "Инфо", но с урезанной шапкой (PAGE_HEADER_PUBLIC) — отдаётся вместо INFO_HTML,
+// когда смотрят без авторизации (см. handleRequest в web.cpp). Тело страницы — то же
+// самое INFO_BODY, меняется только шапка/меню.
+static const char INFO_PUBLIC_HTML[] PROGMEM = R"page(
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Инфо — MLSystems</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+)page" PAGE_HEADER_PUBLIC INFO_BODY R"page(
 </body>
 </html>
 )page";
@@ -193,7 +257,7 @@ static const char SETTINGS_HTML[] PROGMEM = R"page(
       <h2>Настройки алгоритма</h2>
       <form id="algorithmForm" class="settings-form">
         <div class="settings-actions">
-          <button type="button" id="algorithmResetBtn" class="btn-secondary">Сбросить</button>
+          <button type="button" id="algorithmResetBtn" class="btn-primary">Сбросить</button>
           <button type="submit">Сохранить</button>
         </div>
 
@@ -293,18 +357,21 @@ static const char UPDATE_HTML[] PROGMEM = R"page(
 
       <div class="update-block">
         <h3>Загрузить файл с телефона/компьютера</h3>
-        <input type="file" id="fwFile" accept=".bin" />
-        <button id="fwUploadBtn">Обновить</button>
-        <div class="progress"><div class="progress-bar" id="fwUploadBar"></div></div>
-        <p id="fwUploadPercent"></p>
+        <div class="file-picker">
+          <label for="fwFile" class="btn-primary">Выбрать файл</label>
+          <input type="file" id="fwFile" accept=".bin" hidden />
+          <span id="fwFileName" class="file-name">Файл не выбран</span>
+        </div>
+        <button id="fwUploadBtn" disabled>Обновить</button>
       </div>
 
       <div class="update-block">
         <h3>Обновить с сервера</h3>
-        <button id="fwServerBtn">Скачать и установить</button>
-        <div class="progress"><div class="progress-bar" id="fwServerBar"></div></div>
-        <p id="fwServerPercent"></p>
+        <button id="fwServerBtn" disabled>Скачать и установить</button>
       </div>
+
+      <div class="progress" id="fwProgress" hidden><div class="progress-bar" id="fwProgressBar"></div></div>
+      <p id="fwProgressText"></p>
     </section>
   </main>
 
@@ -406,6 +473,26 @@ static const char STYLE_CSS[] PROGMEM = R"rawliteral(
 
 * {
   box-sizing: border-box;
+}
+
+/* Зрительная реакция на нажатие — распространяется на все кнопки и кнопки-лейблы сайта. */
+button,
+.btn-primary,
+.btn-secondary {
+  transition: transform 0.08s ease, filter 0.08s ease, opacity 0.08s ease;
+}
+
+button:not(:disabled):hover,
+.btn-primary:hover,
+.btn-secondary:hover {
+  filter: brightness(1.1);
+}
+
+button:not(:disabled):active,
+.btn-primary:active,
+.btn-secondary:active {
+  transform: scale(0.96);
+  filter: brightness(0.9);
 }
 
 body {
@@ -567,6 +654,11 @@ input[type="range"] {
   text-align: left;
   padding: 10px 12px;
   border-bottom: 1px solid var(--border);
+}
+
+.wiring-table th:first-child,
+.wiring-table td:first-child {
+  border-right: 1px solid var(--border);
 }
 
 .wiring-table th {
@@ -732,6 +824,13 @@ button.relay-btn {
   text-align: center;
 }
 
+/* Страница "Инфо" — три отдельных панели, у каждой своя грид-сетка, поэтому правая колонка
+   у них считается независимо и получается разной ширины (например, у версии прошивки —
+   совсем узкая). Задаём общий минимум, чтобы везде совпадало зрительно. */
+.info-table .settings-control {
+  min-width: 180px;
+}
+
 .update-block {
   padding: 14px 0;
   border-bottom: 1px solid var(--border);
@@ -746,11 +845,40 @@ button.relay-btn {
   font-size: 15px;
 }
 
-.update-block input[type="file"] {
-  display: block;
+.file-picker {
+  display: flex;
+  align-items: center;
+  gap: 12px;
   margin-bottom: 10px;
+}
+
+.file-name {
   font-size: 13px;
+  opacity: 0.65;
+}
+
+.btn-secondary {
+  display: inline-block;
+  padding: 8px 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
   color: var(--text);
+  cursor: pointer;
+  text-align: center;
+  font-size: 14px;
+}
+
+.btn-primary {
+  display: inline-block;
+  padding: 8px 16px;
+  border: none;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+  text-align: center;
+  font-size: 14px;
 }
 
 #scanBtn,
@@ -769,6 +897,11 @@ button.relay-btn {
 
 #forgetBtn[hidden] {
   display: none;
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .progress {
@@ -851,27 +984,34 @@ document.querySelectorAll('.navlink').forEach((a) => {
   }
 });
 
+// Один запрос на всю страницу "Инфо" (версия + наработка + сеть разом) — плата на Ethernet
+// плохо тянет несколько параллельных соединений, а 3 отдельных fetch() — это 3 соединения.
 const fwVerEl = document.getElementById('fwVer');
 if (fwVerEl) {
-  fetch('/api/version')
-    .then((res) => res.json())
-    .then((v) => {
-      let text = v.major + '.' + v.minor;
-      if (v.patch !== 0) text += '.' + v.patch; // последний 0 не показываем
-      fwVerEl.textContent = text;
-    });
-}
-
-const runtimeTextEl = document.getElementById('runtimeText');
-if (runtimeTextEl) {
-  fetch('/api/runtime')
+  fetch('/api/info')
     .then((res) => res.json())
     .then((d) => {
+      let text = d.major + '.' + d.minor;
+      if (d.patch !== 0) text += '.' + d.patch; // последний 0 не показываем
+      fwVerEl.textContent = text;
+
       const hours = Math.floor(d.minutes / 60);
       const mins = d.minutes % 60;
-      runtimeTextEl.textContent = hours + ' часов ' + mins + ' минут';
+      document.getElementById('runtimeText').textContent = hours + ' часов ' + mins + ' минут';
       document.getElementById('fullCycles').textContent = d.fullCycles;
       document.getElementById('partialCycles').textContent = d.partialCycles;
+
+      if (d.ethLinkUp) {
+        document.getElementById('ethMac').textContent = d.ethMac;
+        document.getElementById('ethIp').textContent = d.ethIp;
+      } else {
+        document.getElementById('ethMac').textContent = 'нет подключения';
+        document.getElementById('ethIp').textContent = '—';
+      }
+      document.getElementById('wifiMac').textContent = d.wifiMac;
+      document.getElementById('wifiIp').textContent = d.wifiConnected ? d.wifiIp : 'нет подключения';
+      document.getElementById('apMac').textContent = d.apMac;
+      document.getElementById('apIp').textContent = d.apIp;
     });
 }
 
@@ -1166,69 +1306,84 @@ if (wifiStatusEl) {
   refreshWifiStatus();
 }
 
+// Один общий прогресс-бар на оба способа обновления — показывается только когда реально
+// что-то запущено, а не висит вечно пустым под каждой кнопкой.
 const fwFile = document.getElementById('fwFile');
+const fwFileName = document.getElementById('fwFileName');
 const fwUploadBtn = document.getElementById('fwUploadBtn');
-const fwUploadBar = document.getElementById('fwUploadBar');
-const fwUploadPercent = document.getElementById('fwUploadPercent');
+const fwServerBtn = document.getElementById('fwServerBtn');
+const fwProgress = document.getElementById('fwProgress');
+const fwProgressBar = document.getElementById('fwProgressBar');
+const fwProgressText = document.getElementById('fwProgressText');
+
+function showFwProgress(percent, text) {
+  fwProgress.hidden = false;
+  fwProgressBar.style.width = Math.max(0, percent) + '%';
+  fwProgressText.textContent = text;
+}
+
+if (fwFile) {
+  fwFile.addEventListener('change', () => {
+    const file = fwFile.files[0];
+    fwFileName.textContent = file ? file.name : 'Файл не выбран';
+    fwUploadBtn.disabled = !file;
+  });
+}
 
 if (fwUploadBtn) {
   fwUploadBtn.addEventListener('click', () => {
     const file = fwFile.files[0];
-    if (!file) {
-      fwUploadPercent.textContent = 'Сначала выберите файл';
-      return;
-    }
+    if (!file) return;
 
     const xhr = new XMLHttpRequest();
     xhr.open('POST', '/api/update');
     xhr.upload.onprogress = (e) => {
       if (e.lengthComputable) {
         const percent = Math.round((e.loaded / e.total) * 100);
-        fwUploadBar.style.width = percent + '%';
-        fwUploadPercent.textContent = percent + '%';
+        showFwProgress(percent, percent + '%');
       }
     };
     xhr.onload = () => {
-      fwUploadPercent.textContent = xhr.status === 200
-        ? 'Готово, перезагрузка...'
-        : 'Ошибка обновления';
+      showFwProgress(xhr.status === 200 ? 100 : 0, xhr.status === 200 ? 'Готово, перезагрузка...' : 'Ошибка обновления');
+      fwUploadBtn.disabled = xhr.status !== 200;
     };
     xhr.onerror = () => {
-      fwUploadPercent.textContent = 'Ошибка соединения';
+      showFwProgress(0, 'Ошибка соединения');
+      fwUploadBtn.disabled = false;
     };
     fwUploadBtn.disabled = true;
+    showFwProgress(0, 'Загрузка...');
     xhr.send(file);
   });
 }
 
-const fwServerBtn = document.getElementById('fwServerBtn');
-const fwServerBar = document.getElementById('fwServerBar');
-const fwServerPercent = document.getElementById('fwServerPercent');
-
 if (fwServerBtn) {
+  // Активна только если есть реальное подключение (провод или Wi-Fi к роутеру) —
+  // без интернета "Обновить с сервера" всё равно ничего не сможет скачать.
+  fetch('/api/info')
+    .then((res) => res.json())
+    .then((d) => {
+      fwServerBtn.disabled = !(d.ethLinkUp || d.wifiConnected);
+    });
+
   let pollTimer = null;
 
   async function pollServerProgress() {
     const res = await fetch('/api/update/progress');
     const data = await res.json();
     if (data.percent === -2) {
-      fwServerPercent.textContent = 'Ошибка обновления';
+      showFwProgress(0, 'Ошибка обновления');
       clearInterval(pollTimer);
       fwServerBtn.disabled = false;
       return;
     }
-    const percent = Math.max(0, data.percent);
-    fwServerBar.style.width = percent + '%';
-    fwServerPercent.textContent = percent + '%';
-    if (percent >= 100) {
-      fwServerPercent.textContent = 'Готово, перезагрузка...';
-      clearInterval(pollTimer);
-    }
+    showFwProgress(data.percent, data.percent >= 100 ? 'Готово, перезагрузка...' : data.percent + '%');
+    if (data.percent >= 100) clearInterval(pollTimer);
   }
 
   fwServerBtn.addEventListener('click', async () => {
     fwServerBtn.disabled = true;
-    fwServerPercent.textContent = 'Запуск...';
+    showFwProgress(0, 'Запуск...');
     await fetch('/api/update/server', { method: 'POST' });
     pollTimer = setInterval(pollServerProgress, 1000);
   });

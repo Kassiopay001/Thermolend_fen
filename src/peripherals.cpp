@@ -181,3 +181,10 @@ bool Peripherals_EthLinkUp() {
 IPAddress Peripherals_EthGetIp() {
   return Ethernet.localIP();
 }
+
+String Peripherals_EthGetMac() {
+  char buf[18];
+  snprintf(buf, sizeof(buf), "%02X:%02X:%02X:%02X:%02X:%02X",
+           ethMac[0], ethMac[1], ethMac[2], ethMac[3], ethMac[4], ethMac[5]);
+  return String(buf);
+}

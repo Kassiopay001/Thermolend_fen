@@ -210,17 +210,29 @@ static void handleSettingsPost(Client &client, const String &body) {
   ESP.restart();
 }
 
-static void handleVersionGet(Client &client) {
-  String json = "{\"major\":" + String(fw_ver[0]) +
-                ",\"minor\":" + String(fw_ver[1]) +
-                ",\"patch\":" + String(fw_ver[2]) + "}";
-  sendResponse(client, 200, "application/json", json);
-}
-
-static void handleRuntimeGet(Client &client) {
-  String json = "{\"minutes\":" + String(Logic_GetRuntimeMinutes()) +
-                ",\"fullCycles\":" + String(Logic_GetFullCycles()) +
-                ",\"partialCycles\":" + String(Logic_GetPartialCycles()) + "}";
+// Один запрос на всю страницу "Инфо" (версия + наработка + сеть разом) — раньше было 3
+// отдельных fetch(), это 3 лишних одновременных соединения на плате, которая с несколькими
+// параллельными соединениями справляется плохо.
+static void handleInfoGet(Client &client) {
+  String json = "{";
+  json += "\"major\":" + String(fw_ver[0]);
+  json += ",\"minor\":" + String(fw_ver[1]);
+  json += ",\"patch\":" + String(fw_ver[2]);
+  json += ",\"minutes\":" + String(Logic_GetRuntimeMinutes());
+  json += ",\"fullCycles\":" + String(Logic_GetFullCycles());
+  json += ",\"partialCycles\":" + String(Logic_GetPartialCycles());
+  // Ethernet MAC фиксированный (ETH_MAC_ADDR), IP реальный только если линк поднят —
+  // но отдаём как есть, страница сама решает, показывать ли по ethLinkUp/ethAvailable.
+  json += ",\"ethAvailable\":" + String(Peripherals_EthAvailable() ? "true" : "false");
+  json += ",\"ethLinkUp\":" + String(Peripherals_EthLinkUp() ? "true" : "false");
+  json += ",\"ethMac\":\"" + Peripherals_EthGetMac() + "\"";
+  json += ",\"ethIp\":\"" + Peripherals_EthGetIp().toString() + "\"";
+  json += ",\"wifiConnected\":" + String(WifiClient_IsConnected() ? "true" : "false");
+  json += ",\"wifiMac\":\"" + WiFi.macAddress() + "\""; // MAC станции — своя, отдельная от AP
+  json += ",\"wifiIp\":\"" + WifiClient_GetIp().toString() + "\"";
+  json += ",\"apMac\":\"" + WiFi.softAPmacAddress() + "\""; // MAC точки доступа — отличается от станции
+  json += ",\"apIp\":\"" + WiFi.softAPIP().toString() + "\"";
+  json += "}";
   sendResponse(client, 200, "application/json", json);
 }
 
@@ -347,26 +359,134 @@ static void handleFirmwareUpload(Client &client, int contentLength) {
   ESP.restart();
 }
 
-static void firmwareUpdateTask(void *param) {
-  WiFiClient client;
-  httpUpdate.onProgress([](int cur, int total) {
-    if (total > 0) updateProgressPercent = (cur * 100) / total;
-  });
-
-  t_httpUpdate_return ret = httpUpdate.update(client, FIRMWARE_UPDATE_URL);
-  if (ret == HTTP_UPDATE_OK) {
-    updateProgressPercent = 100;
-    delay(500);
-    ESP.restart();
+// Разбирает FIRMWARE_UPDATE_URL вида "http://host/путь" на хост и путь — без библиотек
+// парсинга URL, просто по первому "/" после "http://".
+static void parseUpdateUrl(String &host, String &path) {
+  String url = FIRMWARE_UPDATE_URL;
+  url.replace("http://", "");
+  int slashIdx = url.indexOf('/');
+  if (slashIdx < 0) {
+    host = url;
+    path = "/";
   } else {
-    updateProgressPercent = -2;
+    host = url.substring(0, slashIdx);
+    path = url.substring(slashIdx);
   }
+}
+
+// Качает уже открытое соединение (GET-заголовки + тело) в Update.write(), тем же способом,
+// что и приём файла из браузера в handleFirmwareUpload() выше. Возвращает true при успехе.
+static bool downloadOverEthernetClient(EthernetClient &client, const String &host, const String &path) {
+  client.print("GET " + path + " HTTP/1.1\r\n");
+  client.print("Host: " + host + "\r\n");
+  client.print("Connection: close\r\n\r\n");
+
+  unsigned long waitStart = millis();
+  while (client.connected() && !client.available()) {
+    if (millis() - waitStart > 15000) {
+      client.stop();
+      return false;
+    }
+    delay(10);
+  }
+
+  // Читаем заголовки ответа строка за строкой до пустой строки, попутно вытаскивая
+  // Content-Length — без него не знаем, сколько байт заливать во флеш.
+  int contentLength = 0;
+  while (client.connected() || client.available()) {
+    String line = client.readStringUntil('\n');
+    line.trim();
+    if (line.length() == 0) break; // пустая строка — заголовки кончились
+    if (line.startsWith("Content-Length:")) {
+      contentLength = line.substring(16).toInt();
+    }
+  }
+
+  if (contentLength <= 0 || !Update.begin(contentLength)) {
+    client.stop();
+    return false;
+  }
+
+  uint8_t buf[512];
+  int received = 0;
+  unsigned long lastDataAt = millis();
+  while (received < contentLength) {
+    int avail = client.available();
+    if (avail <= 0) {
+      if (!client.connected() || millis() - lastDataAt > 15000) break;
+      delay(1);
+      continue;
+    }
+    int toRead = min((int)sizeof(buf), min(avail, contentLength - received));
+    int n = client.read(buf, toRead);
+    if (n <= 0) break;
+    Update.write(buf, n);
+    received += n;
+    lastDataAt = millis();
+    updateProgressPercent = (received * 100) / contentLength;
+  }
+  client.stop();
+
+  return received == contentLength && Update.end(true);
+}
+
+// Пробует Ethernet и Wi-Fi ПРЯМО СЕЙЧАС, а не по тому, что было при загрузке платы — кабель
+// могли перетыкнуть из роутера в ноутбук (или наоборот) уже после старта. Реальная проверка —
+// попытка connect() к настоящему хосту обновления: получилось — значит, Ethernet прямо сейчас
+// смотрит в интернет. HTTPUpdate из ESP-IDF с EthernetClient работать не может (ждёт
+// NetworkClient её же Wi-Fi-стека), поэтому для Ethernet GET и заливку во флеш делаем
+// вручную; для Wi-Fi (WiFiClient совместим с NetworkClient) пользуемся готовым httpUpdate.
+static void firmwareUpdateTask(void *param) {
+  String host, path;
+  parseUpdateUrl(host, path);
+
+  if (Peripherals_EthAvailable()) {
+    EthernetClient ethClient;
+    if (ethClient.connect(host.c_str(), 80)) {
+      if (downloadOverEthernetClient(ethClient, host, path)) {
+        updateProgressPercent = 100;
+        delay(500);
+        ESP.restart();
+        return;
+      }
+      updateProgressPercent = -2; // подключились, но скачать/прошить не вышло — Wi-Fi тут не поможет
+      vTaskDelete(nullptr);
+      return;
+    }
+    // connect() не удался — Ethernet сейчас либо не воткнут, либо смотрит не в роутер
+    // (например, в ноутбук). Переходим к Wi-Fi.
+  }
+
+  if (WifiClient_IsConnected()) {
+    WiFiClient wifiClient;
+    httpUpdate.onProgress([](int cur, int total) {
+      if (total > 0) updateProgressPercent = (cur * 100) / total;
+    });
+    t_httpUpdate_return ret = httpUpdate.update(wifiClient, FIRMWARE_UPDATE_URL);
+    if (ret == HTTP_UPDATE_OK) {
+      updateProgressPercent = 100;
+      delay(500);
+      ESP.restart();
+      return;
+    }
+  }
+
+  updateProgressPercent = -2; // ни Ethernet, ни Wi-Fi не дали дотянуться до интернета
   vTaskDelete(nullptr);
 }
 
 static void handleUpdateFromServerPost(Client &client) {
   if (updateProgressPercent >= 0 && updateProgressPercent < 100) {
     sendResponse(client, 400, "application/json", "{\"error\":\"already running\"}");
+    return;
+  }
+
+  // Если чипа Ethernet вообще нет и Wi-Fi не подключён — точно некуда идти, говорим сразу,
+  // не запуская задачу вхолостую. Если чип Ethernet есть — не решаем заранее, воткнут ли он
+  // в роутер: сама задача проверит это живым connect() к серверу обновления, и при неудаче
+  // сама же перейдёт на Wi-Fi (см. firmwareUpdateTask).
+  if (!Peripherals_EthAvailable() && !WifiClient_IsConnected()) {
+    sendResponse(client, 400, "application/json", "{\"error\":\"no internet\"}");
     return;
   }
   updateProgressPercent = 0;
@@ -389,7 +509,7 @@ static void handleRequest(Client &client, const String &method, const String &pa
   }
   if (method == "GET" && path == "/logout") {
     sessionToken = "";
-    sendRedirect(client, "/login");
+    sendRedirectWithCookie(client, "/info", String(SESSION_COOKIE_NAME) + "=; Path=/; Max-Age=0");
     return;
   }
   if (method == "GET" && path == "/style.css") {
@@ -400,22 +520,38 @@ static void handleRequest(Client &client, const String &method, const String &pa
     sendResponseP(client, "application/javascript", SCRIPT_JS);
     return;
   }
-
-  // ВРЕМЕННО ОТКЛЮЧЕНО НА ПЕРИОД ОТЛАДКИ — раскомментировать перед реальной эксплуатацией!
-  // if (!isAuthorized(cookie)) {
-  //   if (method == "GET") {
-  //     sendRedirect(client, "/login");
-  //   } else {
-  //     sendResponse(client, 401, "application/json", "{\"error\":\"unauthorized\"}");
-  //   }
-  //   return;
-  // }
-
   if (method == "GET" && path == "/") {
     sendRedirect(client, "/info");
-  } else if (method == "GET" && path == "/info") {
-    sendResponseP(client, "text/html", INFO_HTML);
-  } else if (method == "GET" && path == "/connection") {
+    return;
+  }
+  if (method == "GET" && path == "/info") {
+    // Единственная страница, доступная без авторизации (кроме /login) — какую шапку
+    // показать, решает сервер по isAuthorized(), а не браузер по факту наличия куки:
+    // после /logout или перезагрузки контроллера старая кука в браузере может остаться,
+    // но sessionToken на сервере уже сброшен, так что isAuthorized() всё равно даст false.
+    sendResponseP(client, "text/html", isAuthorized(cookie) ? INFO_HTML : INFO_PUBLIC_HTML);
+    return;
+  }
+  if (method == "GET" && path == API_PATH_INFO) {
+    // Тоже без авторизации — страница "Инфо" сама тянет отсюда данные, даже когда её
+    // смотрят без логина.
+    handleInfoGet(client);
+    return;
+  }
+
+  if (!isAuthorized(cookie)) {
+    if (method == "GET") {
+      // Неавторизованный переход (включая проверку "captive portal" при
+      // подключении к Wi-Fi) уводим на публичную страницу "Инфо", а не на
+      // форму входа — вход доступен там кнопкой "Вход".
+      sendRedirect(client, "/info");
+    } else {
+      sendResponse(client, 401, "application/json", "{\"error\":\"unauthorized\"}");
+    }
+    return;
+  }
+
+  if (method == "GET" && path == "/connection") {
     sendResponseP(client, "text/html", CONNECTION_HTML);
   } else if (method == "GET" && path == "/settings") {
     sendResponseP(client, "text/html", SETTINGS_HTML);
@@ -431,10 +567,6 @@ static void handleRequest(Client &client, const String &method, const String &pa
     testModeActive = true;
     testModeLastPingMs = millis();
     sendResponse(client, 200, "application/json", buildStatusJson());
-  } else if (method == "GET" && path == API_PATH_VERSION) {
-    handleVersionGet(client);
-  } else if (method == "GET" && path == API_PATH_RUNTIME) {
-    handleRuntimeGet(client);
   } else if (method == "POST" && path == API_PATH_RELAY) {
     handleRelayPost(client, body);
   } else if (method == "POST" && path == API_PATH_ANALOG) {

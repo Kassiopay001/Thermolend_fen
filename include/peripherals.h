@@ -55,6 +55,7 @@ uint8_t Peripherals_GetAnalogOut();
 bool Peripherals_EthAvailable();
 bool Peripherals_EthLinkUp();
 IPAddress Peripherals_EthGetIp();
+String Peripherals_EthGetMac();
 
 // Режим теста: страница /io шлёт пинг (GET /api/status) раз в 2 сек, пока открыта —
 // выставляется прямым присваиванием оттуда, где нужно (сейчас — web.cpp).
