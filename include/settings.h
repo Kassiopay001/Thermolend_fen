@@ -2,7 +2,7 @@
 
 #include <Arduino.h>
 
-#define SETTINGS_DEFAULT_AP_SSID "ESP32-Relay-Controller"
+#define SETTINGS_DEFAULT_AP_SSID "ML Systems-Controller"
 #define SETTINGS_DEFAULT_AP_PASSWORD "12345678"
 #define SETTINGS_DEFAULT_AUTH_USER "admin"
 #define SETTINGS_DEFAULT_AUTH_PASSWORD "admin"
@@ -18,8 +18,8 @@
 #define SETTINGS_DEFAULT_AO1_F3_TIME_SEC 5
 #define SETTINGS_DEFAULT_AO1_F3_PWR_PERCENT 100
 #define SETTINGS_DEFAULT_AO1_DELAY_OFF_SEC 10
-#define SETTINGS_DEFAULT_CH6_INP_MS 800
-#define SETTINGS_DEFAULT_CH6_DELAY_MS 800
+#define SETTINGS_DEFAULT_CH6_INP_MS 300
+#define SETTINGS_DEFAULT_CH6_DELAY_MS 300
 
 // Все настройки алгоритма (logic.cpp) — один общий блок в NVS. Когда добавляется
 // новый параметр, он просто дописывается сюда и в оба Settings_*AlgorithmSettings() —

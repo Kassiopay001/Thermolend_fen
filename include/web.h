@@ -134,9 +134,9 @@ static const char CONNECTION_HTML[] PROGMEM = R"page(
         <tbody>
           <tr><td><span class="wiring-badge">DI1</span></td><td>Аварийная остановка</td></tr>
           <tr><td><span class="wiring-badge">DI2</span></td><td>Кнопка старт/стоп</td></tr>
-          <tr><td><span class="wiring-badge">DI3</span></td><td>Кнопка вкл/выкл светомузыка</td></tr>
+          <tr><td><span class="wiring-badge">DI3</span></td><td>Кнопка вкл/выкл подсветки</td></tr>
           <tr><td><span class="wiring-badge">DI4</span></td><td>Кнопка вкл/выкл хромотерапии</td></tr>
-          <tr><td><span class="wiring-badge">DI5</span></td><td>Кнопка вкл/выкл нагрев</td></tr>
+          <tr><td><span class="wiring-badge">DI5</span></td><td>Кнопка вкл/выкл нагрева</td></tr>
           <tr><td><span class="wiring-badge">DI6</span></td><td>Кнопка понижения потока воздуха</td></tr>
           <tr><td><span class="wiring-badge">DI7</span></td><td>Датчик присутствия</td></tr>
           <tr><td><span class="wiring-badge">DI8</span></td><td>Не используется</td></tr>
@@ -154,7 +154,7 @@ static const char CONNECTION_HTML[] PROGMEM = R"page(
           <tr><td><span class="wiring-badge">CH3</span></td><td>Подсветка кнопки вкл/выкл светомузыка</td></tr>
           <tr><td><span class="wiring-badge">CH4</span></td><td>Подсветка кнопки вкл/выкл хромотерапии</td></tr>
           <tr><td><span class="wiring-badge">CH5</span></td><td>Подсветка кнопки вкл/выкл нагрев</td></tr>
-          <tr><td><span class="wiring-badge">CH6</span></td><td>Управление светомузыкой</td></tr>
+          <tr><td><span class="wiring-badge">CH6</span></td><td>Управление подсветкой</td></tr>
           <tr><td><span class="wiring-badge">CH7</span></td><td>Управление хромотерапией</td></tr>
           <tr><td><span class="wiring-badge">CH8</span></td><td>Управление нагревом</td></tr>
         </tbody>

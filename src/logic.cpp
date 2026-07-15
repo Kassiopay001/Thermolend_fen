@@ -40,7 +40,15 @@ static DebouncedButton startStopBtn;     // DI2
 static DebouncedButton lightMusicBtn;    // DI3
 static DebouncedButton chromotherapyBtn; // DI4
 static DebouncedButton heatingBtn;       // DI5
+static DebouncedButton airflowDownBtn;   // DI6
 static bool presenceWasActive = false;   // DI7 — для определения фронта (пришёл/ушёл)
+static bool emergencyStopActive = false; // DI1 — для определения фронта (сработала/снята)
+
+// DI6 — понижение оборотов вентилятора, надстройка НАД AO1.max. Каждое нажатие переключает
+// по кругу: 100% -> 75% -> 50% -> 25% -> 100%... Нигде не сохраняется (не настройка, а разовая
+// ручная подстройка на время текущего цикла) и сбрасывается на 100% при каждом старте (DI2).
+static const uint8_t DI6_LEVELS[4] = {100, 75, 50, 25};
+static uint8_t di6LevelIndex = 0;
 
 // Состояние цикла (между Старт и Стоп) — вся обработка ниже сделана простыми счётчиками
 // внутри самого Logic_Update(), без отдельных функций: cycleActive держит, пока CH6/7/8
@@ -72,13 +80,20 @@ static uint8_t fanRampDownDurationSec = 0;  // = logic_set.ao1.delay_off на м
 static uint8_t ch6PulsesRemaining = 0;      // сколько ещё импульсов ОСТАЛОСЬ дать (0 = не идёт)
 static bool ch6PulseOn = false;             // true = сейчас фаза импульса, false = пауза
 static unsigned long ch6PulsePhaseAtMs = 0; // момент начала текущей фазы
-static uint8_t ch6NextProgram = 2;          // следующая программа при СТАРТЕ цикла: 2..5 по кругу
+static uint8_t ch6NextProgram = 2;          // следующая программа при включении света: 2..5 по кругу
 
 static void StartCh6Pulses(uint8_t count) {
   Peripherals_SetRelay(5, true); // CH6 — начинаем сразу с импульса
   ch6PulsesRemaining = count;
   ch6PulseOn = true;
   ch6PulsePhaseAtMs = millis();
+}
+
+// Включение светомузыки (CH3 загорелась) — очередная программа 2..5 по кругу. Общая для
+// момента старта цикла (если CH3 уже горит) и для нажатия DI3 прямо во время цикла.
+static void PulseCh6NextOnProgram() {
+  StartCh6Pulses(ch6NextProgram);
+  ch6NextProgram = (ch6NextProgram >= 5) ? 2 : ch6NextProgram + 1;
 }
 
 static void ServiceCh6Pulses() {
@@ -197,6 +212,17 @@ void Logic_Init() {
   partialCyclesTotal = stats.partialCycles;
 }
 
+// Считает и применяет реальный ШИМ AO1 из "базового" процента мощности (либо текущей точки
+// разгона, либо уже устоявшегося значения после его окончания) с учётом AO1.max и ручной
+// подстройки DI6. Общая для разгона и для устоявшегося состояния ПОСЛЕ него — иначе DI6,
+// нажатый уже после того, как разгон закончился, было бы не к чему применить (ровно тот баг,
+// который сейчас чиним).
+static void ApplyFanOutputPercent(uint8_t basePct) {
+  float_t limitedPct = basePct * (logic_set.ao1.max / 100.0f);
+  limitedPct = limitedPct * (DI6_LEVELS[di6LevelIndex] / 100.0f);
+  Peripherals_SetAnalogOut((uint8_t)(limitedPct * 255UL / 100UL));
+}
+
 void Logic_Update() {
   // testModeActive объявлен в peripherals.h — пока true, страница "Тест" (/io)
   // держит выходы под ручным управлением, алгоритм ниже их не трогает.
@@ -205,11 +231,33 @@ void Logic_Update() {
   // Быстрая проверка входов — каждый вызов Logic_Update(), без задержек.
   // DI1 — цепь аварийной остановки, в норме замкнута (true); при размыкании (false) — авария.
   if (!Peripherals_ReadInput(0)) {
-    Peripherals_SetAllRelays(0x00);
+    if (!emergencyStopActive) {
+      // Авария только что сработала — полностью сбрасываем цикл (как будто он прервался):
+      // подсветки, CH7/8, ароматизация, счётчики (незавершённый цикл), запись в NVS. CH6 тут
+      // не гасим напрямую — StopCycle() сама включает её "программу 1" (короткий импульс-
+      // сигнал внешнему контроллеру), это разрешено оставить и в аварии.
+      StopCycle(false);
+      // В обычной остановке AO1 гасится ПЛАВНО (fanRampDown) — тут нужно РЕЗКО, отменяем.
+      fanRampDownActive = false;
+      Peripherals_SetAnalogOut(0);
+      emergencyStopActive = true;
+    }
+    // Пока авария активна: жёстко держим все реле (кроме CH6 — им управляет импульсная
+    // программа выше, даём ей доиграть) и AO1 в нуле, чтобы ничего не включилось раньше
+    // времени. При снятии аварии cycleActive уже false — само ничего не запустится, нужен
+    // новый ручной Старт.
+    Peripherals_SetRelay(0, false); // CH1
+    Peripherals_SetRelay(1, false); // CH2
+    Peripherals_SetRelay(2, false); // CH3
+    Peripherals_SetRelay(3, false); // CH4
+    Peripherals_SetRelay(4, false); // CH5
+    Peripherals_SetRelay(6, false); // CH7
+    Peripherals_SetRelay(7, false); // CH8
     Peripherals_SetAnalogOut(0);
-    // здесь же будет сброс цикла, когда опишем его состояние
+    ServiceCh6Pulses(); // чтобы импульс "программы 1" на CH6 сам доиграл и погас
     return;
   }
+  emergencyStopActive = false;
 
   // DI7 — датчик присутствия: logic_set.di7.on говорит, физически ли он установлен.
   // Если его нет — весь блок ниже просто не выполняется, CH3/CH4/CH5 полностью
@@ -258,11 +306,12 @@ void Logic_Update() {
       cycleActive = true;
       cycleRemainingSec = logic_set.di2.cycle; // отсчёт длины цикла, досчитывает decision-блок ниже
       fanRampDownActive = false; // на случай, если предыдущее гашение ещё не успело завершиться
+      di6LevelIndex = 0; // DI6 — каждый новый цикл стартует на 100% оборотов
 
-      // CH6 — программа ch6NextProgram (2..5 по кругу); программа 1 зарезервирована за
-      // остановкой цикла (см. StopCycle). После использования сразу готовим следующую.
-      StartCh6Pulses(ch6NextProgram);
-      ch6NextProgram = (ch6NextProgram >= 5) ? 2 : ch6NextProgram + 1;
+      // CH6 — если светомузыка (CH3) уже горит на момент старта, запускаем на ней очередную
+      // программу 2..5. Если не горит — ничего не шлём, остаёмся на программе 1 (см. также
+      // DI3 ниже — та же логика включения/выключения работает и прямо во время цикла).
+      if (Peripherals_GetRelay(2)) PulseCh6NextOnProgram(); // CH3
 
       // Ароматизация — включаем CH1 сразу, досчитывает секунды decision-блок ниже.
       aromaRemainingSec = logic_set.ch1.imp;
@@ -297,9 +346,20 @@ void Logic_Update() {
 
   // DI3 — кнопка светомузыки: Peripherals_ButtonHeld() вернёт true один раз, когда кнопку
   // удержали дольше PERIPH_BUTTON_DEBOUNCE_MS (константа железа, не настройка) — тогда
-  // переключаем CH3 (подсветку этой кнопки) в обратное состояние.
+  // переключаем CH3 (подсветку этой кнопки) в обратное состояние. Пока цикл идёт, то же
+  // нажатие управляет и реальным CH6: выключили подсветку — программа 1 (сигнал "выкл"),
+  // включили обратно — очередная программа 2..5 по кругу. Вне цикла CH6 не трогаем — он
+  // управляет реальным оборудованием, а не просто подсветкой кнопки.
   if (Peripherals_ButtonHeld(lightMusicBtn, Peripherals_ReadInput(2), PERIPH_BUTTON_DEBOUNCE_MS)) {
-    Peripherals_SetRelay(2, !Peripherals_GetRelay(2)); // CH3
+    bool turningOn = !Peripherals_GetRelay(2); // CH3 сейчас выключена — значит, включаем
+    Peripherals_SetRelay(2, turningOn); // CH3
+    if (cycleActive) {
+      if (turningOn) {
+        PulseCh6NextOnProgram();
+      } else {
+        StartCh6Pulses(1); // выключили — программа 1
+      }
+    }
   }
 
   // DI4 — кнопка хромотерапии: та же механика, переключаем её собственную подсветку CH4.
@@ -310,6 +370,13 @@ void Logic_Update() {
   // DI5 — кнопка нагрева: та же механика, переключаем её собственную подсветку CH5.
   if (Peripherals_ButtonHeld(heatingBtn, Peripherals_ReadInput(4), PERIPH_BUTTON_DEBOUNCE_MS)) {
     Peripherals_SetRelay(4, !Peripherals_GetRelay(4)); // CH5
+  }
+
+  // DI6 — кнопка понижения потока воздуха: та же механика антидребезга, но вместо реле
+  // переключает по кругу di6LevelIndex (100/75/50/25%) — применяется в разгоне вентилятора
+  // ниже как надстройка над AO1.max. Сброс на 100% — только при новом старте цикла (DI2).
+  if (Peripherals_ButtonHeld(airflowDownBtn, Peripherals_ReadInput(5), PERIPH_BUTTON_DEBOUNCE_MS)) {
+    di6LevelIndex = (di6LevelIndex + 1) % 4;
   }
 
   // Основная логика принятия решений — не чаще 1 раза в секунду.
@@ -364,11 +431,10 @@ void Logic_Update() {
 
     // AO1.max — ограничение выхода в процентах ОТ процента (см. комментарий у настройки в
     // settings.h): если фаза требует, скажем, 50% мощности, а AO1.max тоже 50%, реальный
-    // выход должен быть на 50% от 50%, т.е. на 25%. Всё считаем в процентах и только в самом
-    // конце переводим итоговый процент в диапазон ШИМ 0-255 — AO1.max сам по себе остаётся
-    // процентом (1-100), в 0-255 нигде не превращается.
-    uint16_t limitedPct = (uint16_t)phasePct * logic_set.ao1.max / 100;
-    Peripherals_SetAnalogOut((uint8_t)((uint32_t)limitedPct * 255UL / 100UL));
+    // выход должен быть на 50% от 50%, т.е. на 25%. DI6_LEVELS[di6LevelIndex] — ручная
+    // надстройка НАД этим (ещё один процент от процента), которую можно менять кнопкой DI6
+    // прямо во время цикла (см. ApplyFanOutputPercent).
+    ApplyFanOutputPercent(phasePct);
 
     if (phaseDone) { // переходим к следующей фазе (или завершаем разгон)
       fanPhaseStartPct = fanPhaseTargetPct;
@@ -385,6 +451,12 @@ void Logic_Update() {
         fanPhase = 0; // разгон завершён — выход остаётся на мощности 3-й фазы
       }
     }
+  } else if (cycleActive) {
+    // Разгон уже закончился, но цикл ещё идёт — держим устоявшуюся мощность
+    // (fanPhaseTargetPct = цель последней, 3-й фазы) и продолжаем накладывать на неё DI6,
+    // если его подвигали уже ПОСЛЕ разгона. Без этой ветки DI6 после разгона было бы
+    // не к чему применить — ровно тот баг, который сейчас чиним.
+    ApplyFanOutputPercent(fanPhaseTargetPct);
   }
 
   // Плавное гашение вентилятора после остановки цикла (StopCycle) — линейно от значения
