@@ -2,9 +2,13 @@
 
 #include <Arduino.h>
 
+static uint8_t fw_ver[3] = {1, 1, 0};	// Версия прошивки
+
 #define WEB_SERVER_PORT 80
 
 #define API_PATH_STATUS "/api/status"
+#define API_PATH_VERSION "/api/version"
+#define API_PATH_RUNTIME "/api/runtime"
 #define API_PATH_RELAY "/api/relay"
 #define API_PATH_ANALOG "/api/analog"
 #define API_PATH_SETTINGS "/api/settings"
@@ -36,10 +40,11 @@
 <div class="brand-text"><span class="brand-name">MLSystems</span><span class="brand-tagline">Панель управления</span></div>
 </header>
 <nav class="topnav">
+<a href="/info" class="navlink" data-path="/info"><svg class="navicon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg><span>Инфо</span></a>
 <a href="/connection" class="navlink" data-path="/connection"><svg class="navicon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 2v6M15 2v6"></path><path d="M6 8h12v4a6 6 0 0 1-6 6 6 6 0 0 1-6-6V8Z"></path><path d="M12 18v4"></path></svg><span>Подключение</span></a>
-<a href="/settings" class="navlink" data-path="/settings"><svg class="navicon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"></path></svg><span>Настройки</span></a>
+<a href="/settings" class="navlink" data-path="/settings"><svg class="navicon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path></svg><span>Настройки</span></a>
 <a href="/wifi" class="navlink" data-path="/wifi"><svg class="navicon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 8.5a16 16 0 0 1 20 0"></path><path d="M5 12a11 11 0 0 1 14 0"></path><path d="M8.5 15.5a6 6 0 0 1 7 0"></path><circle cx="12" cy="19" r="1.3" fill="currentColor" stroke="none"></circle></svg><span>Wi-Fi сеть</span></a>
-<a href="/update" class="navlink" data-path="/update"><svg class="navicon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20V6"></path><path d="M6 12l6-6 6 6"></path><path d="M4 20h16"></path></svg><span>Прошивка</span></a>
+<a href="/update" class="navlink" data-path="/update"><svg class="navicon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v14"></path><path d="M6 12l6 6 6-6"></path><path d="M4 20h16"></path></svg><span>Прошивка</span></a>
 <a href="/access" class="navlink" data-path="/access"><svg class="navicon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="9" rx="2"></rect><path d="M8 11V7a4 4 0 0 1 8 0v4"></path></svg><span>Доступ</span></a>
 <a href="/io" class="navlink" data-path="/io"><svg class="navicon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4 14h6l-1 8 9-12h-6l1-8Z"></path></svg><span>Тест</span></a>
 <a href="/logout" class="navlink" data-path="/logout"><svg class="navicon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><path d="M16 17l5-5-5-5"></path><path d="M21 12H9"></path></svg><span>Выход</span></a>
@@ -76,6 +81,39 @@ static const char LOGIN_HTML[] PROGMEM = R"rawliteral(
 </body>
 </html>
 )rawliteral";
+
+static const char INFO_HTML[] PROGMEM = R"page(
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Инфо — MLSystems</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+)page" PAGE_HEADER R"page(
+  <main>
+    <section class="panel">
+      <h2>Наработка</h2>
+      <p id="runtimeText">Загрузка...</p>
+    </section>
+
+    <section class="panel">
+      <h2>Циклы</h2>
+      <p>Полных циклов: <span id="fullCycles">—</span></p>
+      <p>Неполных циклов: <span id="partialCycles">—</span></p>
+    </section>
+
+    <section class="panel">
+      <p>Версия прошивки: <span id="fwVer"></span></p>
+    </section>
+  </main>
+
+  <script src="/script.js"></script>
+</body>
+</html>
+)page";
 
 static const char CONNECTION_HTML[] PROGMEM = R"page(
 <!DOCTYPE html>
@@ -159,13 +197,49 @@ static const char SETTINGS_HTML[] PROGMEM = R"page(
           <button type="submit">Сохранить</button>
         </div>
 
-        <label class="checkbox-label">
-          <input type="checkbox" id="di7On" name="di7_on" />
-          Датчик присутствия
-        </label>
+        <div class="settings-table">
+          <div class="settings-label"><label for="di2Cycle">Длина цикла, сек (60-300)</label></div>
+          <div class="settings-control"><input type="number" id="di2Cycle" name="di2_cycle" class="input-narrow" min="60" max="300" step="1" required /></div>
 
-        <label>Задержка отключения при отсутствии человека, сек (1-300)</label>
-        <input type="number" id="presenceOffDelaySec" name="presence_off_delay_sec" min="1" max="300" step="1" required />
+          <div class="settings-label"><label for="ch1Imp">Ароматизация, длительность импульса, сек (0-30)</label></div>
+          <div class="settings-control"><input type="number" id="ch1Imp" name="ch1_imp" class="input-narrow" min="0" max="30" step="1" required /></div>
+
+          <div class="settings-label"><label for="ao1Max">Ограничение вентилятора, % (1-100)</label></div>
+          <div class="settings-control"><input type="number" id="ao1Max" name="ao1_max" class="input-narrow" min="1" max="100" step="1" required /></div>
+
+          <div class="settings-label"><label for="ao1F1Time">1 фаза обдува, длительность, сек (1-30)</label></div>
+          <div class="settings-control"><input type="number" id="ao1F1Time" name="ao1_f1_time" class="input-narrow" min="1" max="30" step="1" required /></div>
+
+          <div class="settings-label"><label for="ao1F1Pwr">1 фаза обдува, мощность, % (1-100)</label></div>
+          <div class="settings-control"><input type="number" id="ao1F1Pwr" name="ao1_f1_pwr" class="input-narrow" min="1" max="100" step="1" required /></div>
+
+          <div class="settings-label"><label for="ao1F2Time">2 фаза обдува, длительность, сек (1-30)</label></div>
+          <div class="settings-control"><input type="number" id="ao1F2Time" name="ao1_f2_time" class="input-narrow" min="1" max="30" step="1" required /></div>
+
+          <div class="settings-label"><label for="ao1F2Pwr">2 фаза обдува, мощность, % (1-100)</label></div>
+          <div class="settings-control"><input type="number" id="ao1F2Pwr" name="ao1_f2_pwr" class="input-narrow" min="1" max="100" step="1" required /></div>
+
+          <div class="settings-label"><label for="ao1F3Time">3 фаза обдува, длительность, сек (1-30)</label></div>
+          <div class="settings-control"><input type="number" id="ao1F3Time" name="ao1_f3_time" class="input-narrow" min="1" max="30" step="1" required /></div>
+
+          <div class="settings-label"><label for="ao1F3Pwr">3 фаза обдува, мощность, % (1-100)</label></div>
+          <div class="settings-control"><input type="number" id="ao1F3Pwr" name="ao1_f3_pwr" class="input-narrow" min="1" max="100" step="1" required /></div>
+
+          <div class="settings-label"><label for="ao1DelayOff">Остановка обдува, сек (1-30)</label></div>
+          <div class="settings-control"><input type="number" id="ao1DelayOff" name="ao1_delay_off" class="input-narrow" min="1" max="30" step="1" required /></div>
+
+          <div class="settings-label"><label for="ch6Inp">Длительность импульса управления подсветкой, мсек (200-2000)</label></div>
+          <div class="settings-control"><input type="number" id="ch6Inp" name="ch6_inp" class="input-narrow" min="200" max="2000" step="1" required /></div>
+
+          <div class="settings-label"><label for="ch6Delay">Длительность паузы управления подсветкой, мсек (200-2000)</label></div>
+          <div class="settings-control"><input type="number" id="ch6Delay" name="ch6_delay" class="input-narrow" min="200" max="2000" step="1" required /></div>
+
+          <div class="settings-label"><label for="di7On">Датчик присутствия</label></div>
+          <div class="settings-control"><input type="checkbox" id="di7On" name="di7_on" /></div>
+
+          <div class="settings-label"><label for="presenceOffDelaySec">Задержка отключения по присутствию, сек (1-300)</label></div>
+          <div class="settings-control"><input type="number" id="presenceOffDelaySec" name="presence_off_delay_sec" class="input-narrow" min="1" max="300" step="1" required /></div>
+        </div>
       </form>
       <p id="algorithmMsg"></p>
     </section>
@@ -612,16 +686,50 @@ button.relay-btn {
   color: var(--text);
 }
 
-.checkbox-label {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+.settings-table {
+  display: grid;
+  grid-template-columns: 1fr auto;
 }
 
-.checkbox-label input[type="checkbox"] {
+.settings-table .settings-label,
+.settings-table .settings-control {
+  display: flex;
+  align-items: center;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.settings-table .settings-label {
+  padding-right: 12px;
+}
+
+.settings-table .settings-control {
+  padding-left: 12px;
+  border-left: 1px solid var(--border);
+  justify-content: center;
+}
+
+.settings-table .settings-label:nth-last-child(2),
+.settings-table > .settings-control:last-child {
+  border-bottom: none;
+}
+
+.settings-table label {
+  margin: 0;
+}
+
+.settings-table input[type="checkbox"] {
   width: 18px;
   height: 18px;
+  margin: 0;
   accent-color: var(--accent);
+}
+
+.settings-table input[type="number"].input-narrow {
+  width: 4.5em;
+  flex: none;
+  padding: 6px 8px;
+  text-align: center;
 }
 
 .update-block {
@@ -743,6 +851,30 @@ document.querySelectorAll('.navlink').forEach((a) => {
   }
 });
 
+const fwVerEl = document.getElementById('fwVer');
+if (fwVerEl) {
+  fetch('/api/version')
+    .then((res) => res.json())
+    .then((v) => {
+      let text = v.major + '.' + v.minor;
+      if (v.patch !== 0) text += '.' + v.patch; // последний 0 не показываем
+      fwVerEl.textContent = text;
+    });
+}
+
+const runtimeTextEl = document.getElementById('runtimeText');
+if (runtimeTextEl) {
+  fetch('/api/runtime')
+    .then((res) => res.json())
+    .then((d) => {
+      const hours = Math.floor(d.minutes / 60);
+      const mins = d.minutes % 60;
+      runtimeTextEl.textContent = hours + ' часов ' + mins + ' минут';
+      document.getElementById('fullCycles').textContent = d.fullCycles;
+      document.getElementById('partialCycles').textContent = d.partialCycles;
+    });
+}
+
 const inputsEl = document.getElementById('inputs');
 const relaysEl = document.getElementById('relays');
 const analogSlider = document.getElementById('analogSlider');
@@ -858,15 +990,35 @@ if (authForm) authForm.addEventListener('submit', (e) => { e.preventDefault(); s
 
 const algorithmForm = document.getElementById('algorithmForm');
 const di7OnCheckbox = document.getElementById('di7On');
-const presenceOffDelayInput = document.getElementById('presenceOffDelaySec');
 const algorithmResetBtn = document.getElementById('algorithmResetBtn');
 const algorithmMsg = document.getElementById('algorithmMsg');
+
+// Числовые поля алгоритма: id инпута на странице <-> ключ в JSON API <-> имя form-поля
+// при сохранении. Новые числовые настройки достаточно дописать сюда одной строкой.
+const algorithmNumberFields = [
+  ['presenceOffDelaySec', 'presenceOffDelaySec', 'presence_off_delay_sec'],
+  ['di2Cycle', 'di2Cycle', 'di2_cycle'],
+  ['ch1Imp', 'ch1Imp', 'ch1_imp'],
+  ['ao1Max', 'ao1Max', 'ao1_max'],
+  ['ao1F1Time', 'ao1F1Time', 'ao1_f1_time'],
+  ['ao1F1Pwr', 'ao1F1Pwr', 'ao1_f1_pwr'],
+  ['ao1F2Time', 'ao1F2Time', 'ao1_f2_time'],
+  ['ao1F2Pwr', 'ao1F2Pwr', 'ao1_f2_pwr'],
+  ['ao1F3Time', 'ao1F3Time', 'ao1_f3_time'],
+  ['ao1F3Pwr', 'ao1F3Pwr', 'ao1_f3_pwr'],
+  ['ao1DelayOff', 'ao1DelayOff', 'ao1_delay_off'],
+  ['ch6Inp', 'ch6Inp', 'ch6_inp'],
+  ['ch6Delay', 'ch6Delay', 'ch6_delay'],
+];
 
 async function loadAlgorithmSettings() {
   const res = await fetch('/api/settings/algorithm');
   const data = await res.json();
   if (di7OnCheckbox) di7OnCheckbox.checked = data.di7On;
-  if (presenceOffDelayInput) presenceOffDelayInput.value = data.presenceOffDelaySec;
+  for (const [elId, jsonKey] of algorithmNumberFields) {
+    const el = document.getElementById(elId);
+    if (el) el.value = data[jsonKey];
+  }
 }
 
 if (algorithmForm) {
@@ -876,7 +1028,10 @@ if (algorithmForm) {
     e.preventDefault();
     const params = new URLSearchParams();
     params.append('di7_on', di7OnCheckbox.checked ? '1' : '0');
-    params.append('presence_off_delay_sec', presenceOffDelayInput.value);
+    for (const [elId, , formField] of algorithmNumberFields) {
+      const el = document.getElementById(elId);
+      if (el) params.append(formField, el.value);
+    }
     await fetch('/api/settings/algorithm', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },

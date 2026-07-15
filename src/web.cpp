@@ -210,23 +210,65 @@ static void handleSettingsPost(Client &client, const String &body) {
   ESP.restart();
 }
 
+static void handleVersionGet(Client &client) {
+  String json = "{\"major\":" + String(fw_ver[0]) +
+                ",\"minor\":" + String(fw_ver[1]) +
+                ",\"patch\":" + String(fw_ver[2]) + "}";
+  sendResponse(client, 200, "application/json", json);
+}
+
+static void handleRuntimeGet(Client &client) {
+  String json = "{\"minutes\":" + String(Logic_GetRuntimeMinutes()) +
+                ",\"fullCycles\":" + String(Logic_GetFullCycles()) +
+                ",\"partialCycles\":" + String(Logic_GetPartialCycles()) + "}";
+  sendResponse(client, 200, "application/json", json);
+}
+
 static void handleAlgorithmSettingsGet(Client &client) {
   // Читаем из живого logic_set (logic.cpp), а не из NVS — он всегда синхронен
   // с последним сохранённым значением, лишний раз лезть во флеш незачем.
   String json = "{\"di7On\":" + String(logic_set.di7.on ? "true" : "false") +
-                ",\"presenceOffDelaySec\":" + String(logic_set.di7.delay_off) + "}";
+                ",\"presenceOffDelaySec\":" + String(logic_set.di7.delay_off) +
+                ",\"di2Cycle\":" + String(logic_set.di2.cycle) +
+                ",\"ch1Imp\":" + String(logic_set.ch1.imp) +
+                ",\"ao1Max\":" + String(logic_set.ao1.max) +
+                ",\"ao1F1Time\":" + String(logic_set.ao1.f1_time) +
+                ",\"ao1F1Pwr\":" + String(logic_set.ao1.f1_pwr) +
+                ",\"ao1F2Time\":" + String(logic_set.ao1.f2_time) +
+                ",\"ao1F2Pwr\":" + String(logic_set.ao1.f2_pwr) +
+                ",\"ao1F3Time\":" + String(logic_set.ao1.f3_time) +
+                ",\"ao1F3Pwr\":" + String(logic_set.ao1.f3_pwr) +
+                ",\"ao1DelayOff\":" + String(logic_set.ao1.delay_off) +
+                ",\"ch6Inp\":" + String(logic_set.ch6.inp) +
+                ",\"ch6Delay\":" + String(logic_set.ch6.delay) + "}";
   sendResponse(client, 200, "application/json", json);
 }
 
-static void handleAlgorithmSettingsPost(Client &client, const String &body) {
-  int value = getFormField(body, "presence_off_delay_sec").toInt();
-  if (value < 1) value = 1;
-  if (value > 300) value = 300;
+// Обрезает целое из формы в [minValue, maxValue].
+static int clampFormInt(const String &body, const char *field, int minValue, int maxValue) {
+  int value = getFormField(body, field).toInt();
+  if (value < minValue) value = minValue;
+  if (value > maxValue) value = maxValue;
+  return value;
+}
 
+static void handleAlgorithmSettingsPost(Client &client, const String &body) {
   // Применяем сразу в работающей логике и сохраняем весь блок настроек в NVS разом —
   // без перезагрузки, в отличие от handleSettingsPost() (там AP/Wi-Fi требуют рестарта).
   logic_set.di7.on = getFormField(body, "di7_on") == "1";
-  logic_set.di7.delay_off = (uint16_t)value;
+  logic_set.di7.delay_off = (uint16_t)clampFormInt(body, "presence_off_delay_sec", 1, 300);
+  logic_set.di2.cycle = (uint16_t)clampFormInt(body, "di2_cycle", 60, 300);
+  logic_set.ch1.imp = (uint8_t)clampFormInt(body, "ch1_imp", 0, 30);
+  logic_set.ao1.max = (uint8_t)clampFormInt(body, "ao1_max", 1, 100);
+  logic_set.ao1.f1_time = (uint8_t)clampFormInt(body, "ao1_f1_time", 1, 30);
+  logic_set.ao1.f1_pwr = (uint8_t)clampFormInt(body, "ao1_f1_pwr", 1, 100);
+  logic_set.ao1.f2_time = (uint8_t)clampFormInt(body, "ao1_f2_time", 1, 30);
+  logic_set.ao1.f2_pwr = (uint8_t)clampFormInt(body, "ao1_f2_pwr", 1, 100);
+  logic_set.ao1.f3_time = (uint8_t)clampFormInt(body, "ao1_f3_time", 1, 30);
+  logic_set.ao1.f3_pwr = (uint8_t)clampFormInt(body, "ao1_f3_pwr", 1, 100);
+  logic_set.ao1.delay_off = (uint8_t)clampFormInt(body, "ao1_delay_off", 1, 30);
+  logic_set.ch6.inp = (uint16_t)clampFormInt(body, "ch6_inp", 200, 2000);
+  logic_set.ch6.delay = (uint16_t)clampFormInt(body, "ch6_delay", 200, 2000);
   Settings_SetAlgorithmSettings(logic_set);
 
   sendResponse(client, 200, "application/json", "{\"ok\":true}");
@@ -370,7 +412,9 @@ static void handleRequest(Client &client, const String &method, const String &pa
   // }
 
   if (method == "GET" && path == "/") {
-    sendRedirect(client, "/connection");
+    sendRedirect(client, "/info");
+  } else if (method == "GET" && path == "/info") {
+    sendResponseP(client, "text/html", INFO_HTML);
   } else if (method == "GET" && path == "/connection") {
     sendResponseP(client, "text/html", CONNECTION_HTML);
   } else if (method == "GET" && path == "/settings") {
@@ -387,6 +431,10 @@ static void handleRequest(Client &client, const String &method, const String &pa
     testModeActive = true;
     testModeLastPingMs = millis();
     sendResponse(client, 200, "application/json", buildStatusJson());
+  } else if (method == "GET" && path == API_PATH_VERSION) {
+    handleVersionGet(client);
+  } else if (method == "GET" && path == API_PATH_RUNTIME) {
+    handleRuntimeGet(client);
   } else if (method == "POST" && path == API_PATH_RELAY) {
     handleRelayPost(client, body);
   } else if (method == "POST" && path == API_PATH_ANALOG) {
