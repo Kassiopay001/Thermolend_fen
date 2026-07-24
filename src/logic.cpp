@@ -92,8 +92,9 @@ static void StartCh6Pulses(uint8_t count) {
 // Включение светомузыки (CH3 загорелась) — очередная программа 2..5 по кругу. Общая для
 // момента старта цикла (если CH3 уже горит) и для нажатия DI3 прямо во время цикла.
 static void PulseCh6NextOnProgram() {
+  if (ch6NextProgram == 2) ch6NextProgram = 3;
   StartCh6Pulses(ch6NextProgram);
-  ch6NextProgram = (ch6NextProgram >= 5) ? 2 : ch6NextProgram + 1;
+  ch6NextProgram = (ch6NextProgram >= 6) ? 3 : ch6NextProgram + 1;
 }
 
 static void ServiceCh6Pulses() {
@@ -357,7 +358,7 @@ void Logic_Update() {
       if (turningOn) {
         PulseCh6NextOnProgram();
       } else {
-        StartCh6Pulses(1); // выключили — программа 1
+        StartCh6Pulses(2); // выключили — программа 1
       }
     }
   }

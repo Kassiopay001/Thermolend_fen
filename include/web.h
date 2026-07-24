@@ -2,7 +2,7 @@
 
 #include <Arduino.h>
 
-static uint8_t fw_ver[3] = {1, 2, 0};	// Версия прошивки
+static uint8_t fw_ver[3] = {1, 3, 0};	// Версия прошивки
 
 #define WEB_SERVER_PORT 80
 
@@ -24,7 +24,7 @@ static uint8_t fw_ver[3] = {1, 2, 0};	// Версия прошивки
 
 // Путь к бинарнику прошивки для обновления "с сервера" — задаётся заранее,
 // пользователь в веб-интерфейсе этот адрес не редактирует.
-#define FIRMWARE_UPDATE_URL "http://ml-systems.ru/firmwares_laguna/firmware_lcd.bin"
+#define FIRMWARE_UPDATE_URL "http://ml-systems.ru/firmwares_other/thermolend_fen.bin"
 
 #define SESSION_COOKIE_NAME "session"
 
@@ -36,7 +36,7 @@ static uint8_t fw_ver[3] = {1, 2, 0};	// Версия прошивки
 // Общая шапка (лого) и навигация — вставляется во все защищённые страницы.
 #define PAGE_HEADER R"navblk(<header class="brand">
 <img class="brand-logo" src=")navblk" LOGO_DATA_URI R"navblk(" alt="MLSystems" />
-<div class="brand-text"><span class="brand-name">MLSystems</span><span class="brand-tagline">Панель управления</span></div>
+<div class="brand-text"><span class="brand-name">МЛ Системс</span><span class="brand-tagline">Панель управления</span></div>
 </header>
 <nav class="topnav">
 <a href="/info" class="navlink" data-path="/info"><svg class="navicon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg><span>Инфо</span></a>
@@ -54,7 +54,7 @@ static uint8_t fw_ver[3] = {1, 2, 0};	// Версия прошивки
 // Вход, остальные разделы требуют логина и в меню не показываются, пока не вошли.
 #define PAGE_HEADER_PUBLIC R"navpub(<header class="brand">
 <img class="brand-logo" src=")navpub" LOGO_DATA_URI R"navpub(" alt="MLSystems" />
-<div class="brand-text"><span class="brand-name">MLSystems</span><span class="brand-tagline">Панель управления</span></div>
+<div class="brand-text"><span class="brand-name">МЛ Системс</span><span class="brand-tagline">Панель управления</span></div>
 </header>
 <nav class="topnav">
 <a href="/info" class="navlink" data-path="/info"><svg class="navicon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg><span>Инфо</span></a>
@@ -76,7 +76,7 @@ static const char LOGIN_HTML[] PROGMEM = R"rawliteral(
     <div class="login-box">
       <div class="brand brand-centered">
         <img class="brand-logo" src=")rawliteral" LOGO_DATA_URI R"rawliteral(" alt="MLSystems" />
-        <span class="brand-name">MLSystems</span>
+        <span class="brand-name">МЛ Системс</span>
       </div>
 
       <form class="panel login-form" method="POST" action="/login">
@@ -115,16 +115,16 @@ static const char LOGIN_HTML[] PROGMEM = R"rawliteral(
     <section class="panel">
       <h2>Сеть</h2>
       <div class="settings-table info-table">
-        <div class="settings-label">Ethernet — MAC</div>
+        <div class="settings-label">Провод — MAC</div>
         <div class="settings-control" id="ethMac">—</div>
 
-        <div class="settings-label">Ethernet — IP</div>
+        <div class="settings-label">Провод — IP</div>
         <div class="settings-control" id="ethIp">—</div>
 
-        <div class="settings-label">Wi-Fi — MAC</div>
+        <div class="settings-label">Роутер — MAC</div>
         <div class="settings-control" id="wifiMac">—</div>
 
-        <div class="settings-label">Wi-Fi — IP</div>
+        <div class="settings-label">Роутер — IP</div>
         <div class="settings-control" id="wifiIp">—</div>
 
         <div class="settings-label">Точка доступа — MAC</div>
@@ -152,7 +152,7 @@ static const char INFO_HTML[] PROGMEM = R"page(
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Инфо — MLSystems</title>
+  <title>Инфо — МЛ Системс</title>
   <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
@@ -170,7 +170,7 @@ static const char INFO_PUBLIC_HTML[] PROGMEM = R"page(
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Инфо — MLSystems</title>
+  <title>Инфо — МЛ Системс</title>
   <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
@@ -185,16 +185,17 @@ static const char CONNECTION_HTML[] PROGMEM = R"page(
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Подключение — MLSystems</title>
+  <title>Подключение — МЛ Системс</title>
   <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
 )page" PAGE_HEADER R"page(
   <main>
+  
     <section class="panel">
       <h2>Входы</h2>
       <table class="wiring-table">
-        <thead><tr><th>Вход</th><th>Назначение</th></tr></thead>
+        <thead><tr><th>Канал</th><th>Назначение</th></tr></thead>
         <tbody>
           <tr><td><span class="wiring-badge">DI1</span></td><td>Аварийная остановка</td></tr>
           <tr><td><span class="wiring-badge">DI2</span></td><td>Кнопка старт/стоп</td></tr>
@@ -228,12 +229,28 @@ static const char CONNECTION_HTML[] PROGMEM = R"page(
     <section class="panel">
       <h2>Аналоговый выход</h2>
       <table class="wiring-table">
-        <thead><tr><th>Выход</th><th>Назначение</th></tr></thead>
+        <thead><tr><th>Канал</th><th>Назначение</th></tr></thead>
         <tbody>
           <tr><td><span class="wiring-badge">AO1</span></td><td>Управление скоростью потока воздуха</td></tr>
         </tbody>
       </table>
     </section>
+
+	<section class="panel">
+      <h2>Программы подсветки</h2>
+      <table class="wiring-table">
+        <thead><tr><th>Номер</th><th>Описание</th></tr></thead>
+        <tbody>
+          <tr><td><span class="wiring-badge">1</span></td><td>Привлекающая</td></tr>
+		  <tr><td><span class="wiring-badge">2</span></td><td>Все выключено</td></tr>
+		  <tr><td><span class="wiring-badge">3</span></td><td>Рабочая программа 1</td></tr>
+		  <tr><td><span class="wiring-badge">4</span></td><td>Рабочая программа 2</td></tr>
+		  <tr><td><span class="wiring-badge">5</span></td><td>Рабочая программа 3</td></tr>
+		  <tr><td><span class="wiring-badge">6</span></td><td>Рабочая программа 4</td></tr>
+        </tbody>
+      </table>
+    </section>
+
   </main>
 
   <script src="/script.js"></script>
@@ -247,7 +264,7 @@ static const char SETTINGS_HTML[] PROGMEM = R"page(
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Настройки — MLSystems</title>
+  <title>Настройки — МЛ Системс</title>
   <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
@@ -320,7 +337,7 @@ static const char WIFI_HTML[] PROGMEM = R"page(
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Wi-Fi сеть — MLSystems</title>
+  <title>Wi-Fi сеть — МЛ Системс</title>
   <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
@@ -346,7 +363,7 @@ static const char UPDATE_HTML[] PROGMEM = R"page(
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Обновление прошивки — MLSystems</title>
+  <title>Обновление прошивки — МЛ Системс</title>
   <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
@@ -386,7 +403,7 @@ static const char ACCESS_HTML[] PROGMEM = R"page(
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Доступ — MLSystems</title>
+  <title>Доступ — МЛ Системс</title>
   <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
@@ -427,7 +444,7 @@ static const char IO_HTML[] PROGMEM = R"page(
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Тест входов/выходов — MLSystems</title>
+  <title>Тест входов/выходов — МЛ Системс</title>
   <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
