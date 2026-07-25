@@ -2,7 +2,7 @@
 
 #include <Arduino.h>
 
-static uint8_t fw_ver[3] = {1, 3, 0};	// Версия прошивки
+static uint8_t fw_ver[3] = {1, 3, 1};	// Версия прошивки
 
 #define WEB_SERVER_PORT 80
 
@@ -1361,7 +1361,7 @@ if (fwUploadBtn) {
       }
     };
     xhr.onload = () => {
-      showFwProgress(xhr.status === 200 ? 100 : 0, xhr.status === 200 ? 'Готово, перезагрузка...' : 'Ошибка обновления');
+      showFwProgress(xhr.status === 200 ? 100 : 0, xhr.status === 200 ? 'Перезагрузка...' : 'Ошибка обновления');
       fwUploadBtn.disabled = xhr.status !== 200;
     };
     xhr.onerror = () => {
@@ -1386,15 +1386,24 @@ if (fwServerBtn) {
   let pollTimer = null;
 
   async function pollServerProgress() {
-    const res = await fetch('/api/update/progress');
-    const data = await res.json();
+    let data;
+    try {
+      const res = await fetch('/api/update/progress');
+      data = await res.json();
+    } catch (e) {
+      // Сервер уже перезагружается и не отвечает — это ожидаемо после 100%,
+      // а не ошибка обновления.
+      showFwProgress(100, 'Перезагрузка...');
+      clearInterval(pollTimer);
+      return;
+    }
     if (data.percent === -2) {
       showFwProgress(0, 'Ошибка обновления');
       clearInterval(pollTimer);
       fwServerBtn.disabled = false;
       return;
     }
-    showFwProgress(data.percent, data.percent >= 100 ? 'Готово, перезагрузка...' : data.percent + '%');
+    showFwProgress(data.percent, data.percent >= 100 ? 'Перезагрузка...' : data.percent + '%');
     if (data.percent >= 100) clearInterval(pollTimer);
   }
 
@@ -1402,7 +1411,7 @@ if (fwServerBtn) {
     fwServerBtn.disabled = true;
     showFwProgress(0, 'Запуск...');
     await fetch('/api/update/server', { method: 'POST' });
-    pollTimer = setInterval(pollServerProgress, 1000);
+    pollTimer = setInterval(pollServerProgress, 500);
   });
 }
 )rawliteral";

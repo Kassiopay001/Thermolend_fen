@@ -78,7 +78,7 @@ void Peripherals_Init() {
   }
 
   ledcAttach(PIN_ANALOG_OUT, PERIPH_ANALOG_FREQ_HZ, PERIPH_ANALOG_RESOLUTION_BITS);
-  ledcWrite(PIN_ANALOG_OUT, 0);
+  Peripherals_SetAnalogOut(0);
 
   ethInit();
 }
@@ -163,7 +163,7 @@ bool Peripherals_RelaysAvailable() {
 
 void Peripherals_SetAnalogOut(uint8_t value) {
   analogOutValue = value;
-  ledcWrite(PIN_ANALOG_OUT, value);
+  ledcWrite(PIN_ANALOG_OUT, 255 - value);
 }
 
 uint8_t Peripherals_GetAnalogOut() {

@@ -21,6 +21,10 @@ static String sessionToken = "";
 // -2 = ошибка, -1 = не запущено, 0-99 = идёт скачивание, 100 = готово
 static volatile int updateProgressPercent = -1;
 
+// true, когда браузер реально забрал ответ "100" с /api/update/progress — используется,
+// чтобы не гадать с фиксированной задержкой перед рестартом (см. waitForProgressAck ниже).
+static volatile bool updateProgressAcked = false;
+
 static String urlDecode(const String &input) {
   String output;
   output.reserve(input.length());
@@ -430,6 +434,21 @@ static bool downloadOverEthernetClient(EthernetClient &client, const String &hos
   return received == contentLength && Update.end(true);
 }
 
+// Вместо фиксированной задержки перед рестартом ждём, пока браузер реально не заберёт
+// ответ "100" — handleUpdateProgress() выставляет updateProgressAcked при такой отдаче.
+// Так рестарт происходит сразу, как только клиент увидел 100%, а не по угаданному таймауту,
+// и при этом есть страховочный потолок на случай, если клиент вообще не опросит (вкладку
+// закрыли, сеть легла и т.п.) — тогда всё равно перезагружаемся, просто позже.
+static void waitForProgressAck() {
+  updateProgressAcked = false;
+  updateProgressPercent = 100;
+  unsigned long waitStart = millis();
+  while (!updateProgressAcked && millis() - waitStart < 5000) {
+    delay(50);
+  }
+  delay(300); // даём браузеру время отрисовать "Перезагрузка..." после самого ответа
+}
+
 // Пробует Ethernet и Wi-Fi ПРЯМО СЕЙЧАС, а не по тому, что было при загрузке платы — кабель
 // могли перетыкнуть из роутера в ноутбук (или наоборот) уже после старта. Реальная проверка —
 // попытка connect() к настоящему хосту обновления: получилось — значит, Ethernet прямо сейчас
@@ -444,8 +463,7 @@ static void firmwareUpdateTask(void *param) {
     EthernetClient ethClient;
     if (ethClient.connect(host.c_str(), 80)) {
       if (downloadOverEthernetClient(ethClient, host, path)) {
-        updateProgressPercent = 100;
-        delay(500);
+        waitForProgressAck();
         ESP.restart();
         return;
       }
@@ -464,8 +482,7 @@ static void firmwareUpdateTask(void *param) {
     });
     t_httpUpdate_return ret = httpUpdate.update(wifiClient, FIRMWARE_UPDATE_URL);
     if (ret == HTTP_UPDATE_OK) {
-      updateProgressPercent = 100;
-      delay(500);
+      waitForProgressAck();
       ESP.restart();
       return;
     }
@@ -495,7 +512,9 @@ static void handleUpdateFromServerPost(Client &client) {
 }
 
 static void handleUpdateProgress(Client &client) {
-  sendResponse(client, 200, "application/json", "{\"percent\":" + String(updateProgressPercent) + "}");
+  int percent = updateProgressPercent;
+  if (percent >= 100) updateProgressAcked = true; // подтверждаем: клиент реально увидел 100
+  sendResponse(client, 200, "application/json", "{\"percent\":" + String(percent) + "}");
 }
 
 static void handleRequest(Client &client, const String &method, const String &path, const String &cookie, const String &body) {
