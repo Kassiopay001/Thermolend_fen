@@ -2,7 +2,7 @@
 
 #include <Arduino.h>
 
-static uint8_t fw_ver[3] = {1, 3, 1};	// Версия прошивки
+static uint8_t fw_ver[3] = {1, 3, 2};	// Версия прошивки
 
 #define WEB_SERVER_PORT 80
 

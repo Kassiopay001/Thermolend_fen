@@ -163,7 +163,8 @@ bool Peripherals_RelaysAvailable() {
 
 void Peripherals_SetAnalogOut(uint8_t value) {
   analogOutValue = value;
-  ledcWrite(PIN_ANALOG_OUT, 255 - value);
+//   ledcWrite(PIN_ANALOG_OUT, 255 - value);
+  ledcWrite(PIN_ANALOG_OUT, value);
 }
 
 uint8_t Peripherals_GetAnalogOut() {
