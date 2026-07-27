@@ -5,7 +5,7 @@
 
 // DI1 Аварийная остановка
 // DI2 Кнопка старт/стоп
-// DI3 Кнопка вкл/выкл светомузыка
+// DI3 Не используется
 // DI4 Кнопка вкл/выкл хромотерапии
 // DI5 Кнопка вкл/выкл нагрев
 // DI6 Кнопка понижения потока воздуха
@@ -14,10 +14,10 @@
 //
 // CH1 Управление ароматизацией
 // CH2 Подсветка кнопки старт/стоп
-// CH3 Подсветка кнопки вкл/выкл светомузыка
+// CH3 Не используется
 // CH4 Подсветка кнопки вкл/выкл хромотерапии
 // CH5 Подсветка кнопки вкл/выкл нагрев
-// CH6 Управление светомузыкой
+// CH6 Подсветка кнопки понижения потока
 // CH7 Управление хромотерапией
 // CH8 Управление нагревом
 //
@@ -37,7 +37,6 @@
 AlgorithmSettings logic_set;
 
 static DebouncedButton startStopBtn;     // DI2
-static DebouncedButton lightMusicBtn;    // DI3
 static DebouncedButton chromotherapyBtn; // DI4
 static DebouncedButton heatingBtn;       // DI5
 static DebouncedButton airflowDownBtn;   // DI6
@@ -51,8 +50,8 @@ static const uint8_t DI6_LEVELS[4] = {100, 75, 50, 25};
 static uint8_t di6LevelIndex = 0;
 
 // Состояние цикла (между Старт и Стоп) — вся обработка ниже сделана простыми счётчиками
-// внутри самого Logic_Update(), без отдельных функций: cycleActive держит, пока CH6/7/8
-// живьём следуют за CH3/4/5; cycleRemainingSec — отсчёт длины самого цикла (DI2.cycle);
+// внутри самого Logic_Update(), без отдельных функций: cycleActive держит, пока CH7/8
+// живьём следуют за CH4/5; cycleRemainingSec — отсчёт длины самого цикла (DI2.cycle);
 // aromaRemainingSec — сколько ещё секунд гореть CH1 (импульс ароматизации); fanPhase/
 // fanPhaseElapsedSec/... — разгон AO1 по трём фазам; fanRampDownActive/... — плавное
 // гашение AO1 после остановки цикла. Всё это тикает раз в секунду в блоке "Основная логика
@@ -72,45 +71,13 @@ static uint8_t fanRampDownStartPwm = 0;     // значение ШИМ (0-255) �
 static uint8_t fanRampDownElapsedSec = 0;   // сколько секунд уже прошло в гашении
 static uint8_t fanRampDownDurationSec = 0;  // = logic_set.ao1.delay_off на момент запуска
 
-// CH6 (управление светомузыкой) — не просто реле вкл/выкл, а импульсный сигнал для внешнего
-// контроллера светомузыки: количество импульсов выбирает программу на нём (1-5). Импульс —
-// logic_set.ch6.inp мс, пауза между импульсами — logic_set.ch6.delay мс (обе в пределах
-// 200-2000 мс, поэтому нужна мс-точность — ServiceCh6Pulses() тикает в быстром тике
-// Logic_Update(), а не в decision-блоке раз в секунду).
-static uint8_t ch6PulsesRemaining = 0;      // сколько ещё импульсов ОСТАЛОСЬ дать (0 = не идёт)
-static bool ch6PulseOn = false;             // true = сейчас фаза импульса, false = пауза
-static unsigned long ch6PulsePhaseAtMs = 0; // момент начала текущей фазы
-static uint8_t ch6NextProgram = 2;          // следующая программа при включении света: 2..5 по кругу
-
-static void StartCh6Pulses(uint8_t count) {
-  Peripherals_SetRelay(5, true); // CH6 — начинаем сразу с импульса
-  ch6PulsesRemaining = count;
-  ch6PulseOn = true;
-  ch6PulsePhaseAtMs = millis();
-}
-
-// Включение светомузыки (CH3 загорелась) — очередная программа 2..5 по кругу. Общая для
-// момента старта цикла (если CH3 уже горит) и для нажатия DI3 прямо во время цикла.
-static void PulseCh6NextOnProgram() {
-  if (ch6NextProgram == 2) ch6NextProgram = 3;
-  StartCh6Pulses(ch6NextProgram);
-  ch6NextProgram = (ch6NextProgram >= 6) ? 3 : ch6NextProgram + 1;
-}
-
-static void ServiceCh6Pulses() {
-  if (ch6PulsesRemaining == 0) return;
-  unsigned long phaseDurationMs = ch6PulseOn ? logic_set.ch6.inp : logic_set.ch6.delay;
-  if (millis() - ch6PulsePhaseAtMs < phaseDurationMs) return;
-  ch6PulsePhaseAtMs = millis();
-  if (ch6PulseOn) {
-    Peripherals_SetRelay(5, false); // CH6 — импульс закончился
-    ch6PulsesRemaining--;
-    if (ch6PulsesRemaining > 0) ch6PulseOn = false; // ещё будут импульсы — уходим в паузу
-  } else {
-    Peripherals_SetRelay(5, true); // CH6 — пауза закончилась, следующий импульс
-    ch6PulseOn = true;
-  }
-}
+// CH6 — подсветка кнопки DI6 (понижение потока воздуха). Включается/выключается вместе с
+// CH4/CH5 (те же события: приход/уход по датчику присутствия DI7, старт/остановка
+// цикла) — ch6BacklightOn держит это "групповое" желаемое состояние. Поверх него, пока DI6
+// физически зажата, CH6 гасится (визуальная реакция на нажатие) — см. пересчёт в
+// Logic_Update() ниже, который применяет это каждый вызов, а не раз в секунду, чтобы
+// реакция на нажатие была мгновенной.
+static bool ch6BacklightOn = false;
 
 // Наработка (время реальной работы цикла, не аптайм устройства) и счётчики циклов —
 // статистика для страницы "Инфо", копится в RAM и пишется в NVS только в момент остановки
@@ -128,9 +95,8 @@ uint32_t Logic_GetFullCycles() { return fullCyclesTotal; }
 uint32_t Logic_GetPartialCycles() { return partialCyclesTotal; }
 
 // Полная остановка цикла — гасит вообще всё, что цикл включал: обе группы подсветок
-// (CH2 и CH3/4/5) и CH7/CH8 — сразу. CH6 не гасится напрямую, а получает программу 1 (см.
-// StartCh6Pulses выше) — один импульс как сигнал внешнему контроллеру светомузыки "цикл
-// закончен". Ароматизация (CH1) гасится сразу; вентилятор (AO1) — не резко, а плавно от
+// (CH2 и CH4/5), CH6 (подсветка DI6 — гасится тут же, вместе с CH4/5) и CH7/CH8 — сразу.
+// Ароматизация (CH1) гасится сразу; вентилятор (AO1) — не резко, а плавно от
 // текущего значения до 0 за logic_set.ao1.delay_off секунд (см. fanRampDown* и decision-блок
 // ниже). Используется в трёх местах: явное нажатие Стоп без датчика присутствия, автоматическое
 // истечение задержки присутствия (человек ушёл и не вернулся) и истечение времени самого
@@ -146,12 +112,11 @@ static void StopCycle(bool completedFully) {
   CancelLightsOffDelay(); // на случай, если задержка присутствия ещё висит с этого же цикла
   Peripherals_SetRelay(0, false); // CH1
   Peripherals_SetRelay(1, false); // CH2
-  Peripherals_SetRelay(2, false); // CH3
   Peripherals_SetRelay(3, false); // CH4
   Peripherals_SetRelay(4, false); // CH5
   Peripherals_SetRelay(6, false); // CH7
   Peripherals_SetRelay(7, false); // CH8
-  StartCh6Pulses(1); // CH6 — программа 1
+  ch6BacklightOn = false; // CH6 — подсветка DI6, гасится вместе с CH4/5
   aromaRemainingSec = 0;
   fanPhase = 0; // прекращаем разгон, если он ещё шёл
 
@@ -171,7 +136,7 @@ static void StopCycle(bool completedFully) {
 // отмену в двух местах. НО: DI7 вооружает его при ЛЮБОЙ потере присутствия, даже когда
 // никакой цикл не идёт (предцикловая подсветка "человек подошёл/отошёл", либо цикл уже
 // закончился сам, а человек просто ещё не встал) — в этом случае по истечении задержки
-// нужно просто погасить CH3/4/5, а НЕ считать это остановкой цикла (иначе один и тот же
+// нужно просто погасить CH4/5, а НЕ считать это остановкой цикла (иначе один и тот же
 // визит задвоится в статистике и лишний раз запишется в NVS). Поэтому at arm-time запоминаем
 // forCycleStop — было ли это вооружено ради реально идущего цикла.
 static bool lightsOffPending = false;      // идёт отсчёт
@@ -198,9 +163,9 @@ static void ServiceLightsOffDelay() {
     } else {
       // Цикл не идёт (предцикловая подсветка либо уже отработавший цикл) — гасим только
       // подсветку, статистику и остальное оборудование не трогаем.
-      Peripherals_SetRelay(2, false); // CH3
       Peripherals_SetRelay(3, false); // CH4
       Peripherals_SetRelay(4, false); // CH5
+      ch6BacklightOn = false; // CH6 — подсветка DI6, гасится вместе с CH4/5
     }
   }
 }
@@ -234,47 +199,44 @@ void Logic_Update() {
   if (!Peripherals_ReadInput(0)) {
     if (!emergencyStopActive) {
       // Авария только что сработала — полностью сбрасываем цикл (как будто он прервался):
-      // подсветки, CH7/8, ароматизация, счётчики (незавершённый цикл), запись в NVS. CH6 тут
-      // не гасим напрямую — StopCycle() сама включает её "программу 1" (короткий импульс-
-      // сигнал внешнему контроллеру), это разрешено оставить и в аварии.
+      // подсветки, CH7/8, ароматизация, счётчики (незавершённый цикл), запись в NVS.
       StopCycle(false);
       // В обычной остановке AO1 гасится ПЛАВНО (fanRampDown) — тут нужно РЕЗКО, отменяем.
       fanRampDownActive = false;
       Peripherals_SetAnalogOut(0);
+      ch6BacklightOn = false; // CH6 — подсветка DI6, тоже гасится аварией
       emergencyStopActive = true;
     }
-    // Пока авария активна: жёстко держим все реле (кроме CH6 — им управляет импульсная
-    // программа выше, даём ей доиграть) и AO1 в нуле, чтобы ничего не включилось раньше
-    // времени. При снятии аварии cycleActive уже false — само ничего не запустится, нужен
-    // новый ручной Старт.
+    // Пока авария активна: жёстко держим все реле и AO1 в нуле, чтобы ничего не включилось
+    // раньше времени. При снятии аварии cycleActive уже false — само ничего не запустится,
+    // нужен новый ручной Старт.
     Peripherals_SetRelay(0, false); // CH1
     Peripherals_SetRelay(1, false); // CH2
-    Peripherals_SetRelay(2, false); // CH3
     Peripherals_SetRelay(3, false); // CH4
     Peripherals_SetRelay(4, false); // CH5
+    Peripherals_SetRelay(5, false); // CH6
     Peripherals_SetRelay(6, false); // CH7
     Peripherals_SetRelay(7, false); // CH8
     Peripherals_SetAnalogOut(0);
-    ServiceCh6Pulses(); // чтобы импульс "программы 1" на CH6 сам доиграл и погас
     return;
   }
   emergencyStopActive = false;
 
   // DI7 — датчик присутствия: logic_set.di7.on говорит, физически ли он установлен.
-  // Если его нет — весь блок ниже просто не выполняется, CH3/CH4/CH5 полностью
-  // отдаются кнопкам DI3/DI4/DI5 без вмешательства логики присутствия.
+  // Если его нет — весь блок ниже просто не выполняется, CH4/CH5 полностью
+  // отдаются кнопкам DI4/DI5 без вмешательства логики присутствия.
   if (logic_set.di7.on) {
-    // При замыкании (человек пришёл) сразу включаем подсветку всех 3 кнопок и отменяем
+    // При замыкании (человек пришёл) сразу включаем подсветку кнопок и отменяем
     // отложенное выключение, если оно шло (например, было запущено кнопкой Стоп, а человек
     // никуда не уходил или успел вернуться). При размыкании (человек ушёл) — не гасим сразу,
     // а запускаем общий отложенный выключатель (см. ArmLightsOffDelay выше), который через
-    // logic_set.di7.delay_off секунд выключит CH3/CH4/CH5, если человек не вернётся.
+    // logic_set.di7.delay_off секунд выключит CH4/CH5, если человек не вернётся.
     bool presenceActive = Peripherals_ReadInput(6);
     if (presenceActive) {
       if (!presenceWasActive) { // человек только что пришёл (или вернулся)
-        Peripherals_SetRelay(2, true); // CH3
         Peripherals_SetRelay(3, true); // CH4
         Peripherals_SetRelay(4, true); // CH5
+        ch6BacklightOn = true; // CH6 — подсветка DI6, вместе с CH4/5
         CancelLightsOffDelay();
       }
     } else if (presenceWasActive) { // человек только что пропал — запускаем отсчёт задержки
@@ -287,8 +249,8 @@ void Logic_Update() {
     presenceWasActive = presenceActive;
   }
 
-  // DI2 — кнопка старт/стоп: та же механика антидребезга, что и у DI3/DI4/DI5, но
-  // включаем/выключаем ей CH2 (собственную подсветку). Особые случаи с CH3/CH4/CH5:
+  // DI2 — кнопка старт/стоп: та же механика антидребезга, что и у DI4/DI5, но
+  // включаем/выключаем ей CH2 (собственную подсветку). Особые случаи с CH4/CH5:
   // - без датчика присутствия (logic_set.di7.on == false) кнопка ими управляет полностью
   //   сама — включает сразу при старте, гасит сразу при стопе;
   // - с датчиком присутствия ими управляет он, кнопка тут ничего не включает и не гасит
@@ -299,20 +261,15 @@ void Logic_Update() {
     Peripherals_SetRelay(1, !Peripherals_GetRelay(1)); // CH2
     if (turningOn) {
       if (!logic_set.di7.on) {
-        Peripherals_SetRelay(2, true); // CH3
         Peripherals_SetRelay(3, true); // CH4
         Peripherals_SetRelay(4, true); // CH5
+        ch6BacklightOn = true; // CH6 — подсветка DI6, вместе с CH4/5
       }
       CancelLightsOffDelay();
       cycleActive = true;
       cycleRemainingSec = logic_set.di2.cycle; // отсчёт длины цикла, досчитывает decision-блок ниже
       fanRampDownActive = false; // на случай, если предыдущее гашение ещё не успело завершиться
       di6LevelIndex = 0; // DI6 — каждый новый цикл стартует на 100% оборотов
-
-      // CH6 — если светомузыка (CH3) уже горит на момент старта, запускаем на ней очередную
-      // программу 2..5. Если не горит — ничего не шлём, остаёмся на программе 1 (см. также
-      // DI3 ниже — та же логика включения/выключения работает и прямо во время цикла).
-      if (Peripherals_GetRelay(2)) PulseCh6NextOnProgram(); // CH3
 
       // Ароматизация — включаем CH1 сразу, досчитывает секунды decision-блок ниже.
       aromaRemainingSec = logic_set.ch1.imp;
@@ -329,8 +286,8 @@ void Logic_Update() {
       // и полностью (см. StopCycle выше): подсветки, CH6/7/8, ароматизация, вентилятор.
       StopCycle(false); // прервано вручную кнопкой Стоп
     } else {
-      // С датчиком — сразу гасим только CH7/CH8, остальное (подсветки CH3/4/5, CH6-программа
-      // 1, ароматизация, вентилятор) остановит ServiceLightsOffDelay() ниже, когда истечёт
+      // С датчиком — сразу гасим только CH7/CH8, остальное (подсветки CH4/5/6,
+      // ароматизация, вентилятор) остановит ServiceLightsOffDelay() ниже, когда истечёт
       // задержка присутствия, если человек не вернётся раньше.
       cycleActive = false;
       Peripherals_SetRelay(6, false); // CH7
@@ -339,29 +296,16 @@ void Logic_Update() {
     }
   }
 
-  // Обслуживаем отсчёт отложенного выключения и импульсную программу CH6 каждый вызов — вне
-  // троттлинга ниже, т.к. это времязависимая логика (см. комментарий про быстрый/медленный
-  // уровни у DI3/4/5 выше; у CH6 вообще мс-точность, ей раз в секунду точно мало).
+  // Обслуживаем отсчёт отложенного выключения каждый вызов — вне троттлинга ниже, т.к. это
+  // времязависимая логика (см. комментарий про быстрый/медленный уровни у DI4/5 выше).
   ServiceLightsOffDelay();
-  ServiceCh6Pulses();
 
-  // DI3 — кнопка светомузыки: Peripherals_ButtonHeld() вернёт true один раз, когда кнопку
-  // удержали дольше PERIPH_BUTTON_DEBOUNCE_MS (константа железа, не настройка) — тогда
-  // переключаем CH3 (подсветку этой кнопки) в обратное состояние. Пока цикл идёт, то же
-  // нажатие управляет и реальным CH6: выключили подсветку — программа 1 (сигнал "выкл"),
-  // включили обратно — очередная программа 2..5 по кругу. Вне цикла CH6 не трогаем — он
-  // управляет реальным оборудованием, а не просто подсветкой кнопки.
-  if (Peripherals_ButtonHeld(lightMusicBtn, Peripherals_ReadInput(2), PERIPH_BUTTON_DEBOUNCE_MS)) {
-    bool turningOn = !Peripherals_GetRelay(2); // CH3 сейчас выключена — значит, включаем
-    Peripherals_SetRelay(2, turningOn); // CH3
-    if (cycleActive) {
-      if (turningOn) {
-        PulseCh6NextOnProgram();
-      } else {
-        StartCh6Pulses(2); // выключили — программа 1
-      }
-    }
-  }
+  // CH6 — подсветка кнопки DI6: следует за ch6BacklightOn (см. её определение выше — те же
+  // события, что включают/гасят CH4/5), но пока DI6 физически зажата — гасится, вне
+  // зависимости от ch6BacklightOn. Считаем каждый вызов (не в decision-блоке раз в секунду),
+  // чтобы реакция на нажатие была мгновенной, без встроенного антидребезга — короткое
+  // дребезжание контактов на подсветке не критично, в отличие от переключения уровня ниже.
+  Peripherals_SetRelay(5, ch6BacklightOn && !Peripherals_ReadInput(5)); // CH6
 
   // DI4 — кнопка хромотерапии: та же механика, переключаем её собственную подсветку CH4.
   if (Peripherals_ButtonHeld(chromotherapyBtn, Peripherals_ReadInput(3), PERIPH_BUTTON_DEBOUNCE_MS)) {
@@ -376,6 +320,7 @@ void Logic_Update() {
   // DI6 — кнопка понижения потока воздуха: та же механика антидребезга, но вместо реле
   // переключает по кругу di6LevelIndex (100/75/50/25%) — применяется в разгоне вентилятора
   // ниже как надстройка над AO1.max. Сброс на 100% — только при новом старте цикла (DI2).
+  // Собственная подсветка этой кнопки (CH6) в этот антидребезг не завязана — см. выше.
   if (Peripherals_ButtonHeld(airflowDownBtn, Peripherals_ReadInput(5), PERIPH_BUTTON_DEBOUNCE_MS)) {
     di6LevelIndex = (di6LevelIndex + 1) % 4;
   }
@@ -387,9 +332,9 @@ void Logic_Update() {
 
   // Пока цикл активен, CH7/CH8 (реальные исполнительные выходы) живьём следуют за CH4/CH5
   // (лампочки кнопок) — переключили кнопку во время цикла, через (максимум) секунду
-  // поменяется и выход. CH6 сюда не входит — им целиком заведует импульсная программа
-  // (ServiceCh6Pulses выше), а не подсветка CH3. При остановке цикла CH7/8 гасятся сразу в
-  // блоке DI2 выше (CH6 получает программу 1 через StopCycle()).
+  // поменяется и выход. CH6 сюда не входит — она считается каждый вызов отдельной строкой
+  // выше, а не в этом секундном decision-блоке. При остановке цикла CH7/8 гасятся сразу в
+  // блоке DI2 выше.
   if (cycleActive) {
     Peripherals_SetRelay(6, Peripherals_GetRelay(3)); // CH7 = CH4
     Peripherals_SetRelay(7, Peripherals_GetRelay(4)); // CH8 = CH5

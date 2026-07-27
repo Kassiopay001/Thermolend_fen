@@ -18,8 +18,6 @@
 #define SETTINGS_DEFAULT_AO1_F3_TIME_SEC 5
 #define SETTINGS_DEFAULT_AO1_F3_PWR_PERCENT 100
 #define SETTINGS_DEFAULT_AO1_DELAY_OFF_SEC 10
-#define SETTINGS_DEFAULT_CH6_INP_MS 300
-#define SETTINGS_DEFAULT_CH6_DELAY_MS 300
 
 // Все настройки алгоритма (logic.cpp) — один общий блок в NVS. Когда добавляется
 // новый параметр, он просто дописывается сюда и в оба Settings_*AlgorithmSettings() —
@@ -29,7 +27,7 @@
 struct AlgorithmSettings {
   struct {
     bool on;             // DI7.on — датчик присутствия физически установлен и используется
-    uint16_t delay_off;  // DI7.delay_off — задержка отключения CH3/CH4/CH5, сек
+    uint16_t delay_off;  // DI7.delay_off — задержка отключения CH4/CH5, сек
   } di7;
 
   struct {
@@ -50,11 +48,6 @@ struct AlgorithmSettings {
     uint8_t f3_pwr;   // AO1.f3_pwr — 3 фаза обдува, мощность, % (1-100)
     uint8_t delay_off; // AO1.delay_off — плавная остановка обдува, сек (1-30)
   } ao1;
-
-  struct {
-    uint16_t inp;   // CH6.inp — длительность импульса управления подсветкой, мсек (200-2000)
-    uint16_t delay; // CH6.delay — длительность паузы управления подсветкой, мсек (200-2000)
-  } ch6;
 };
 
 void Settings_Init();

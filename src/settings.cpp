@@ -66,8 +66,8 @@ AlgorithmSettings Settings_GetAlgorithmSettings() {
   settings.ao1.f3_time = prefs.getUChar("ao1_f3_time", SETTINGS_DEFAULT_AO1_F3_TIME_SEC);
   settings.ao1.f3_pwr = prefs.getUChar("ao1_f3_pwr", SETTINGS_DEFAULT_AO1_F3_PWR_PERCENT);
   settings.ao1.delay_off = prefs.getUChar("ao1_delay_off", SETTINGS_DEFAULT_AO1_DELAY_OFF_SEC);
-  settings.ch6.inp = prefs.getUShort("ch6_inp", SETTINGS_DEFAULT_CH6_INP_MS);
-  settings.ch6.delay = prefs.getUShort("ch6_delay", SETTINGS_DEFAULT_CH6_DELAY_MS);
+  if (prefs.isKey("ch6_inp")) prefs.remove("ch6_inp");     // канал CH6 больше не настраивается
+  if (prefs.isKey("ch6_delay")) prefs.remove("ch6_delay"); // подчищаем то, что могло остаться от старой версии
   return settings;
 }
 
@@ -84,8 +84,6 @@ void Settings_SetAlgorithmSettings(const AlgorithmSettings &settings) {
   prefs.putUChar("ao1_f3_time", settings.ao1.f3_time);
   prefs.putUChar("ao1_f3_pwr", settings.ao1.f3_pwr);
   prefs.putUChar("ao1_delay_off", settings.ao1.delay_off);
-  prefs.putUShort("ch6_inp", settings.ch6.inp);
-  prefs.putUShort("ch6_delay", settings.ch6.delay);
 }
 
 RuntimeStats Settings_GetRuntimeStats() {

@@ -2,7 +2,7 @@
 
 #include <Arduino.h>
 
-static uint8_t fw_ver[3] = {1, 3, 2};	// Версия прошивки
+static uint8_t fw_ver[3] = {1, 3, 3};	// Версия прошивки
 
 #define WEB_SERVER_PORT 80
 
@@ -199,7 +199,7 @@ static const char CONNECTION_HTML[] PROGMEM = R"page(
         <tbody>
           <tr><td><span class="wiring-badge">DI1</span></td><td>Аварийная остановка</td></tr>
           <tr><td><span class="wiring-badge">DI2</span></td><td>Кнопка старт/стоп</td></tr>
-          <tr><td><span class="wiring-badge">DI3</span></td><td>Кнопка вкл/выкл подсветки</td></tr>
+          <tr><td><span class="wiring-badge">DI3</span></td><td>Не используется</td></tr>
           <tr><td><span class="wiring-badge">DI4</span></td><td>Кнопка вкл/выкл хромотерапии</td></tr>
           <tr><td><span class="wiring-badge">DI5</span></td><td>Кнопка вкл/выкл нагрева</td></tr>
           <tr><td><span class="wiring-badge">DI6</span></td><td>Кнопка понижения потока воздуха</td></tr>
@@ -216,10 +216,10 @@ static const char CONNECTION_HTML[] PROGMEM = R"page(
         <tbody>
           <tr><td><span class="wiring-badge">CH1</span></td><td>Управление ароматизацией</td></tr>
           <tr><td><span class="wiring-badge">CH2</span></td><td>Подсветка кнопки старт/стоп</td></tr>
-          <tr><td><span class="wiring-badge">CH3</span></td><td>Подсветка кнопки вкл/выкл светомузыка</td></tr>
+          <tr><td><span class="wiring-badge">CH3</span></td><td>Не используется</td></tr>
           <tr><td><span class="wiring-badge">CH4</span></td><td>Подсветка кнопки вкл/выкл хромотерапии</td></tr>
           <tr><td><span class="wiring-badge">CH5</span></td><td>Подсветка кнопки вкл/выкл нагрев</td></tr>
-          <tr><td><span class="wiring-badge">CH6</span></td><td>Управление подсветкой</td></tr>
+          <tr><td><span class="wiring-badge">CH6</span></td><td>Подсветка кнопки понижения потока воздуха</td></tr>
           <tr><td><span class="wiring-badge">CH7</span></td><td>Управление хромотерапией</td></tr>
           <tr><td><span class="wiring-badge">CH8</span></td><td>Управление нагревом</td></tr>
         </tbody>
@@ -232,21 +232,6 @@ static const char CONNECTION_HTML[] PROGMEM = R"page(
         <thead><tr><th>Канал</th><th>Назначение</th></tr></thead>
         <tbody>
           <tr><td><span class="wiring-badge">AO1</span></td><td>Управление скоростью потока воздуха</td></tr>
-        </tbody>
-      </table>
-    </section>
-
-	<section class="panel">
-      <h2>Программы подсветки</h2>
-      <table class="wiring-table">
-        <thead><tr><th>Номер</th><th>Описание</th></tr></thead>
-        <tbody>
-          <tr><td><span class="wiring-badge">1</span></td><td>Привлекающая</td></tr>
-		  <tr><td><span class="wiring-badge">2</span></td><td>Все выключено</td></tr>
-		  <tr><td><span class="wiring-badge">3</span></td><td>Рабочая программа 1</td></tr>
-		  <tr><td><span class="wiring-badge">4</span></td><td>Рабочая программа 2</td></tr>
-		  <tr><td><span class="wiring-badge">5</span></td><td>Рабочая программа 3</td></tr>
-		  <tr><td><span class="wiring-badge">6</span></td><td>Рабочая программа 4</td></tr>
         </tbody>
       </table>
     </section>
@@ -308,12 +293,6 @@ static const char SETTINGS_HTML[] PROGMEM = R"page(
 
           <div class="settings-label"><label for="ao1DelayOff">Остановка обдува, сек (1-30)</label></div>
           <div class="settings-control"><input type="number" id="ao1DelayOff" name="ao1_delay_off" class="input-narrow" min="1" max="30" step="1" required /></div>
-
-          <div class="settings-label"><label for="ch6Inp">Длительность импульса управления подсветкой, мсек (200-2000)</label></div>
-          <div class="settings-control"><input type="number" id="ch6Inp" name="ch6_inp" class="input-narrow" min="200" max="2000" step="1" required /></div>
-
-          <div class="settings-label"><label for="ch6Delay">Длительность паузы управления подсветкой, мсек (200-2000)</label></div>
-          <div class="settings-control"><input type="number" id="ch6Delay" name="ch6_delay" class="input-narrow" min="200" max="2000" step="1" required /></div>
 
           <div class="settings-label"><label for="di7On">Датчик присутствия</label></div>
           <div class="settings-control"><input type="checkbox" id="di7On" name="di7_on" /></div>
@@ -1164,8 +1143,6 @@ const algorithmNumberFields = [
   ['ao1F3Time', 'ao1F3Time', 'ao1_f3_time'],
   ['ao1F3Pwr', 'ao1F3Pwr', 'ao1_f3_pwr'],
   ['ao1DelayOff', 'ao1DelayOff', 'ao1_delay_off'],
-  ['ch6Inp', 'ch6Inp', 'ch6_inp'],
-  ['ch6Delay', 'ch6Delay', 'ch6_delay'],
 ];
 
 async function loadAlgorithmSettings() {

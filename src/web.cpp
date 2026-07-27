@@ -254,9 +254,7 @@ static void handleAlgorithmSettingsGet(Client &client) {
                 ",\"ao1F2Pwr\":" + String(logic_set.ao1.f2_pwr) +
                 ",\"ao1F3Time\":" + String(logic_set.ao1.f3_time) +
                 ",\"ao1F3Pwr\":" + String(logic_set.ao1.f3_pwr) +
-                ",\"ao1DelayOff\":" + String(logic_set.ao1.delay_off) +
-                ",\"ch6Inp\":" + String(logic_set.ch6.inp) +
-                ",\"ch6Delay\":" + String(logic_set.ch6.delay) + "}";
+                ",\"ao1DelayOff\":" + String(logic_set.ao1.delay_off) + "}";
   sendResponse(client, 200, "application/json", json);
 }
 
@@ -283,8 +281,6 @@ static void handleAlgorithmSettingsPost(Client &client, const String &body) {
   logic_set.ao1.f3_time = (uint8_t)clampFormInt(body, "ao1_f3_time", 1, 30);
   logic_set.ao1.f3_pwr = (uint8_t)clampFormInt(body, "ao1_f3_pwr", 1, 100);
   logic_set.ao1.delay_off = (uint8_t)clampFormInt(body, "ao1_delay_off", 1, 30);
-  logic_set.ch6.inp = (uint16_t)clampFormInt(body, "ch6_inp", 200, 2000);
-  logic_set.ch6.delay = (uint16_t)clampFormInt(body, "ch6_delay", 200, 2000);
   Settings_SetAlgorithmSettings(logic_set);
 
   sendResponse(client, 200, "application/json", "{\"ok\":true}");
