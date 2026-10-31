@@ -31,6 +31,8 @@ static uint8_t analogOutValue = 0;
 bool testModeActive = false;
 unsigned long testModeLastPingMs = 0;
 
+volatile bool licenseOk = false;
+
 static void ethInit() {
   SPI.begin(PIN_ETH_SCK, PIN_ETH_MISO, PIN_ETH_MOSI, PIN_ETH_CS);
   Ethernet.init(PIN_ETH_CS);
@@ -139,6 +141,7 @@ uint8_t Peripherals_ReadAllInputs() {
 
 void Peripherals_SetRelay(uint8_t index, bool state) {
   if (!relaysAvailable || index >= PERIPH_RELAY_COUNT) return;
+  if (!licenseOk) state = false; // не активировано — выходы заглушены
   relays.writePin(index, state);
 }
 
@@ -149,6 +152,7 @@ bool Peripherals_GetRelay(uint8_t index) {
 
 void Peripherals_SetAllRelays(uint8_t mask) {
   if (!relaysAvailable) return;
+  if (!licenseOk) mask = 0; // не активировано — выходы заглушены
   relays.writeAll(mask);
 }
 
@@ -162,6 +166,7 @@ bool Peripherals_RelaysAvailable() {
 }
 
 void Peripherals_SetAnalogOut(uint8_t value) {
+  if (!licenseOk) value = 0; // не активировано — выход заглушен
   analogOutValue = value;
 //   ledcWrite(PIN_ANALOG_OUT, 255 - value);
   ledcWrite(PIN_ANALOG_OUT, value);

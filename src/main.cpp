@@ -1,5 +1,6 @@
 #include <Arduino.h>
 
+#include "license.h"
 #include "logic.h"
 #include "peripherals.h"
 #include "settings.h"
@@ -10,6 +11,7 @@ void setup() {
 
   Settings_Init();
   Peripherals_Init();
+  licenseOk = license_check(); // без интернета — подпись в NVS; активация, если нет, в Web_Init()
   Logic_Init();
   Web_Init();
   Web_OtaBegin();

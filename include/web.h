@@ -2,7 +2,7 @@
 
 #include <Arduino.h>
 
-static uint8_t fw_ver[3] = {1, 3, 3};	// Версия прошивки
+static uint8_t fw_ver[3] = {1, 4, 0};	// Версия прошивки
 
 #define WEB_SERVER_PORT 80
 
@@ -98,6 +98,10 @@ static const char LOGIN_HTML[] PROGMEM = R"rawliteral(
 // ниже. Один источник правды, чтобы правки полей не расходились между двумя копиями.
 #define INFO_BODY R"infobody(
   <main>
+    <section class="panel" id="licenseWarning" hidden>
+      <div class="license-warning">Устройство не активировано!</div>
+    </section>
+
     <section class="panel">
       <h2>Наработка</h2>
       <div class="settings-table info-table">
@@ -121,7 +125,7 @@ static const char LOGIN_HTML[] PROGMEM = R"rawliteral(
         <div class="settings-label">Провод — IP</div>
         <div class="settings-control" id="ethIp">—</div>
 
-        <div class="settings-label">Роутер — MAC</div>
+        <div class="settings-label">Роутер — MAC<span class="sn-mark">(SN)</span></div>
         <div class="settings-control" id="wifiMac">—</div>
 
         <div class="settings-label">Роутер — IP</div>
@@ -465,6 +469,7 @@ static const char STYLE_CSS[] PROGMEM = R"rawliteral(
   --accent: #3b82f6;
   --on: #22c55e;
   --off: #4b5563;
+  --error: #ef4444;
 }
 
 * {
@@ -827,6 +832,22 @@ button.relay-btn {
   min-width: 180px;
 }
 
+/* Страница "Инфо" — плашка "Устройство не активировано" в самом верху: та же панель, что у
+   версии прошивки, с тем же отступом строки, только вместо таблицы одна красная надпись. */
+/* Страница "Инфо" — пометка "(SN)" у MAC роутера: это заводской MAC платы, по нему идёт
+   активация, он же служит серийным номером устройства. */
+.sn-mark {
+  margin-left: 6px;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.license-warning {
+  padding: 10px 0;
+  color: var(--error);
+  font-weight: 600;
+}
+
 .update-block {
   padding: 14px 0;
   border-bottom: 1px solid var(--border);
@@ -990,6 +1011,9 @@ if (fwVerEl) {
       let text = d.major + '.' + d.minor;
       if (d.patch !== 0) text += '.' + d.patch; // последний 0 не показываем
       fwVerEl.textContent = text;
+
+      // Плашка по умолчанию скрыта — показываем, только если сервер прямо сказал "не активировано".
+      document.getElementById('licenseWarning').hidden = d.licensed !== false;
 
       const hours = Math.floor(d.minutes / 60);
       const mins = d.minutes % 60;

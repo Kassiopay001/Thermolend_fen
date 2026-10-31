@@ -190,6 +190,11 @@ static void ApplyFanOutputPercent(uint8_t basePct) {
 }
 
 void Logic_Update() {
+  // licenseOk объявлен в peripherals.h — пока устройство не активировано, алгоритм стоит
+  // целиком (иначе нажатия DI2 копили бы пустые циклы в статистике NVS), а сами выходы
+  // заглушены в Peripherals_Set*. Проверка раньше testModeActive — тест тоже не в обход.
+  if (!licenseOk) return;
+
   // testModeActive объявлен в peripherals.h — пока true, страница "Тест" (/io)
   // держит выходы под ручным управлением, алгоритм ниже их не трогает.
   if (testModeActive) return;

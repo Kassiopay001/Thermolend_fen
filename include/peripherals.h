@@ -66,6 +66,12 @@ String Peripherals_EthGetMac();
 extern bool testModeActive;
 extern unsigned long testModeLastPingMs;
 
+// Активация устройства (lib/License): выставляется в main.cpp по license_check() при старте и
+// задачей активации в web.cpp, когда подпись получена с сервера. Пока false — все выходы
+// заглушены прямо в Peripherals_Set* (что бы ни просили логика или страница "Тест"), а
+// алгоритм в Logic_Update() не выполняется. volatile — пишется из другой задачи FreeRTOS.
+extern volatile bool licenseOk;
+
 // Обработка "удержания" входа сверх аппаратного дребезга (см. updateInputs() в
 // peripherals.cpp) — например, кнопка должна быть зажата дольше debounceMs, чтобы
 // засчиталось нажатие. Общая утилита для входов, поэтому здесь, а не в logic.cpp.

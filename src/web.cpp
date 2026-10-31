@@ -7,6 +7,7 @@
 #include <Update.h>
 #include <WiFi.h>
 
+#include "license.h"
 #include "logic.h"
 #include "peripherals.h"
 #include "settings.h"
@@ -236,6 +237,7 @@ static void handleInfoGet(Client &client) {
   json += ",\"wifiIp\":\"" + WifiClient_GetIp().toString() + "\"";
   json += ",\"apMac\":\"" + WiFi.softAPmacAddress() + "\""; // MAC точки доступа — отличается от станции
   json += ",\"apIp\":\"" + WiFi.softAPIP().toString() + "\"";
+  json += ",\"licensed\":" + String(licenseOk ? "true" : "false"); // false — плашка "не активировано"
   json += "}";
   sendResponse(client, 200, "application/json", json);
 }
@@ -359,10 +361,11 @@ static void handleFirmwareUpload(Client &client, int contentLength) {
   ESP.restart();
 }
 
-// Разбирает FIRMWARE_UPDATE_URL вида "http://host/путь" на хост и путь — без библиотек
-// парсинга URL, просто по первому "/" после "http://".
-static void parseUpdateUrl(String &host, String &path) {
-  String url = FIRMWARE_UPDATE_URL;
+// Разбирает адрес вида "http://host/путь" на хост и путь — без библиотек парсинга URL,
+// просто по первому "/" после "http://". Нужен для запросов через EthernetClient
+// (обновление прошивки, активация), которому хост и путь передаются по отдельности.
+static void parseUrl(const String &fullUrl, String &host, String &path) {
+  String url = fullUrl;
   url.replace("http://", "");
   int slashIdx = url.indexOf('/');
   if (slashIdx < 0) {
@@ -453,7 +456,7 @@ static void waitForProgressAck() {
 // вручную; для Wi-Fi (WiFiClient совместим с NetworkClient) пользуемся готовым httpUpdate.
 static void firmwareUpdateTask(void *param) {
   String host, path;
-  parseUpdateUrl(host, path);
+  parseUrl(FIRMWARE_UPDATE_URL, host, path);
 
   if (Peripherals_EthAvailable()) {
     EthernetClient ethClient;
@@ -511,6 +514,74 @@ static void handleUpdateProgress(Client &client) {
   int percent = updateProgressPercent;
   if (percent >= 100) updateProgressAcked = true; // подтверждаем: клиент реально увидел 100
   sendResponse(client, 200, "application/json", "{\"percent\":" + String(percent) + "}");
+}
+
+// То же, что license_activate() (тот же адрес — license_get_url, тот же приём ответа —
+// license_save), но через W5500: esp_http_client ходит только через сетевой стек ESP (Wi-Fi),
+// с EthernetClient работать не может — как и HTTPUpdate в обновлении прошивки выше.
+// HTTP/1.0 — чтобы сервер не прислал тело кусками (chunked), разбирать их тут нечем.
+static bool licenseActivateOverEthernet() {
+  if (!Peripherals_EthAvailable() || !Peripherals_EthLinkUp()) return false;
+
+  char url[128];
+  if (license_get_url(url, sizeof(url)) != ESP_OK) return false;
+  String host, path;
+  parseUrl(url, host, path);
+
+  EthernetClient client;
+  if (!client.connect(host.c_str(), 80)) return false;
+  client.print("GET " + path + " HTTP/1.0\r\n");
+  client.print("Host: " + host + "\r\n");
+  client.print("Connection: close\r\n\r\n");
+
+  unsigned long waitStart = millis();
+  while (client.connected() && !client.available()) {
+    if (millis() - waitStart > 10000) { // тот же таймаут, что и в license_activate()
+      client.stop();
+      return false;
+    }
+    delay(10);
+  }
+
+  // Статусная строка "HTTP/1.x 200 OK" — подпись берём только из ответа 200, как и license_activate().
+  String statusLine = client.readStringUntil('\n');
+  bool status200 = statusLine.substring(statusLine.indexOf(' ') + 1).startsWith("200");
+
+  // Заголовки пропускаем до пустой строки — за ней тело: 128 hex-символов подписи.
+  while (client.connected() || client.available()) {
+    String line = client.readStringUntil('\n');
+    line.trim();
+    if (line.length() == 0) break;
+  }
+
+  char hex[129] = {0};
+  int n = status200 ? (int)client.readBytes(hex, 128) : 0;
+  client.stop();
+
+  return license_save(hex, n) == ESP_OK;
+}
+
+// Задача активации — создаётся только на неактивированном устройстве (см. Web_Init()) и
+// просыпается по уведомлению "получен IP": первый раз сразу при старте (провод получает IP
+// ещё в Peripherals_Init()), дальше — на каждое подключение Wi-Fi к роутеру (onStaGotIp).
+// Сначала Ethernet, потом Wi-Fi — тот же приоритет, что и у обновления прошивки.
+// После успеха не удаляется, а просто спит до перезагрузки — так обработчик события Wi-Fi
+// гарантированно не уведомит уже удалённую задачу; после перезагрузки license_check()
+// пройдёт, и задача больше не создаётся.
+static TaskHandle_t licenseTask = nullptr;
+
+static void licenseActivateTask(void *param) {
+  for (;;) {
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    if (licenseOk) continue;
+    if (licenseActivateOverEthernet() || (WifiClient_IsConnected() && license_activate() == ESP_OK)) {
+      licenseOk = true; // выходы и алгоритм оживают сразу, без перезагрузки
+    }
+  }
+}
+
+static void onStaGotIp(arduino_event_id_t event) {
+  if (!licenseOk) xTaskNotifyGive(licenseTask);
 }
 
 static void handleRequest(Client &client, const String &method, const String &path, const String &cookie, const String &body) {
@@ -684,6 +755,14 @@ void Web_Init() {
   WiFi.softAP(Settings_GetApSsid().c_str(), Settings_GetApPassword().c_str());
   dnsServer.start(53, "*", WiFi.softAPIP());
   apServer.begin();
+
+  // Не активировано — запускаем задачу активации до WifiClient_Init(), чтобы поймать и самое
+  // первое подключение к роутеру. Первая попытка — сразу: по проводу IP уже получен.
+  if (!licenseOk) {
+    xTaskCreate(licenseActivateTask, "license", 8192, nullptr, 1, &licenseTask);
+    WiFi.onEvent(onStaGotIp, ARDUINO_EVENT_WIFI_STA_GOT_IP);
+    xTaskNotifyGive(licenseTask);
+  }
 
   WifiClient_Init();
 }
