@@ -2,7 +2,7 @@
 
 #include <Arduino.h>
 
-static uint8_t fw_ver[3] = {1, 4, 0};	// Версия прошивки
+static uint8_t fw_ver[3] = {2, 0, 0};	// Версия прошивки
 
 #define WEB_SERVER_PORT 80
 
@@ -108,11 +108,11 @@ static const char LOGIN_HTML[] PROGMEM = R"rawliteral(
         <div class="settings-label">Время работы</div>
         <div class="settings-control" id="runtimeText">Загрузка...</div>
 
-        <div class="settings-label">Полных циклов</div>
-        <div class="settings-control" id="fullCycles">—</div>
+        <div class="settings-label">Циклов без обогрева</div>
+        <div class="settings-control" id="noHeatCycles">—</div>
 
-        <div class="settings-label">Неполных циклов</div>
-        <div class="settings-control" id="partialCycles">—</div>
+        <div class="settings-label">Циклов с обогревом</div>
+        <div class="settings-control" id="heatCycles">—</div>
       </div>
     </section>
 
@@ -202,12 +202,12 @@ static const char CONNECTION_HTML[] PROGMEM = R"page(
         <thead><tr><th>Канал</th><th>Назначение</th></tr></thead>
         <tbody>
           <tr><td><span class="wiring-badge">DI1</span></td><td>Аварийная остановка</td></tr>
-          <tr><td><span class="wiring-badge">DI2</span></td><td>Кнопка старт/стоп</td></tr>
-          <tr><td><span class="wiring-badge">DI3</span></td><td>Не используется</td></tr>
-          <tr><td><span class="wiring-badge">DI4</span></td><td>Кнопка вкл/выкл хромотерапии</td></tr>
-          <tr><td><span class="wiring-badge">DI5</span></td><td>Кнопка вкл/выкл нагрева</td></tr>
-          <tr><td><span class="wiring-badge">DI6</span></td><td>Кнопка понижения потока воздуха</td></tr>
-          <tr><td><span class="wiring-badge">DI7</span></td><td>Датчик присутствия</td></tr>
+          <tr><td><span class="wiring-badge">DI2</span></td><td>Кнопка старт без обогрева</td></tr>
+          <tr><td><span class="wiring-badge">DI3</span></td><td>Кнопка старт с обогревом</td></tr>
+          <tr><td><span class="wiring-badge">DI4</span></td><td>Не используется</td></tr>
+          <tr><td><span class="wiring-badge">DI5</span></td><td>Не используется</td></tr>
+          <tr><td><span class="wiring-badge">DI6</span></td><td>Не используется</td></tr>
+          <tr><td><span class="wiring-badge">DI7</span></td><td>Не используется</td></tr>
           <tr><td><span class="wiring-badge">DI8</span></td><td>Не используется</td></tr>
         </tbody>
       </table>
@@ -219,13 +219,13 @@ static const char CONNECTION_HTML[] PROGMEM = R"page(
         <thead><tr><th>Канал</th><th>Назначение</th></tr></thead>
         <tbody>
           <tr><td><span class="wiring-badge">CH1</span></td><td>Управление ароматизацией</td></tr>
-          <tr><td><span class="wiring-badge">CH2</span></td><td>Подсветка кнопки старт/стоп</td></tr>
-          <tr><td><span class="wiring-badge">CH3</span></td><td>Не используется</td></tr>
-          <tr><td><span class="wiring-badge">CH4</span></td><td>Подсветка кнопки вкл/выкл хромотерапии</td></tr>
-          <tr><td><span class="wiring-badge">CH5</span></td><td>Подсветка кнопки вкл/выкл нагрев</td></tr>
-          <tr><td><span class="wiring-badge">CH6</span></td><td>Подсветка кнопки понижения потока воздуха</td></tr>
-          <tr><td><span class="wiring-badge">CH7</span></td><td>Управление хромотерапией</td></tr>
-          <tr><td><span class="wiring-badge">CH8</span></td><td>Управление нагревом</td></tr>
+          <tr><td><span class="wiring-badge">CH2</span></td><td>Подсветка кнопки старт без обогрева</td></tr>
+          <tr><td><span class="wiring-badge">CH3</span></td><td>Подсветка кнопки старт с обогревом</td></tr>
+          <tr><td><span class="wiring-badge">CH4</span></td><td>Световой контур А (контур человека)</td></tr>
+          <tr><td><span class="wiring-badge">CH5</span></td><td>Световой контур Б (дефлекторы)</td></tr>
+          <tr><td><span class="wiring-badge">CH6</span></td><td>Световой контур В (цветотерапия)</td></tr>
+          <tr><td><span class="wiring-badge">CH7</span></td><td>Включение нагрева</td></tr>
+          <tr><td><span class="wiring-badge">CH8</span></td><td>Включение вентилятора (пуск частотника)</td></tr>
         </tbody>
       </table>
     </section>
@@ -235,7 +235,7 @@ static const char CONNECTION_HTML[] PROGMEM = R"page(
       <table class="wiring-table">
         <thead><tr><th>Канал</th><th>Назначение</th></tr></thead>
         <tbody>
-          <tr><td><span class="wiring-badge">AO1</span></td><td>Управление скоростью потока воздуха</td></tr>
+          <tr><td><span class="wiring-badge">AO1</span></td><td>Скорость вентилятора (вход частотника)</td></tr>
         </tbody>
       </table>
     </section>
@@ -268,41 +268,52 @@ static const char SETTINGS_HTML[] PROGMEM = R"page(
         </div>
 
         <div class="settings-table">
+          <div class="settings-group">Вентилятор</div>
+          <div class="settings-label"><label for="ao1Speed">Скорость вентилятора, % (1-100)</label></div>
+          <div class="settings-control"><input type="number" id="ao1Speed" name="ao1_speed" class="input-narrow" min="1" max="100" step="1" required /></div>
+
+          <div class="settings-group">Старт без обогрева</div>
           <div class="settings-label"><label for="di2Cycle">Длина цикла, сек (60-300)</label></div>
           <div class="settings-control"><input type="number" id="di2Cycle" name="di2_cycle" class="input-narrow" min="60" max="300" step="1" required /></div>
 
-          <div class="settings-label"><label for="ch1Imp">Ароматизация, длительность импульса, сек (0-30)</label></div>
+          <div class="settings-label"><label for="di2RampUp">Разгон вентилятора, сек (1-60)</label></div>
+          <div class="settings-control"><input type="number" id="di2RampUp" name="di2_ramp_up" class="input-narrow" min="1" max="60" step="1" required /></div>
+
+          <div class="settings-label"><label for="di2RampDown">Остановка вентилятора, сек (1-120)</label></div>
+          <div class="settings-control"><input type="number" id="di2RampDown" name="di2_ramp_down" class="input-narrow" min="1" max="120" step="1" required /></div>
+
+          <div class="settings-group">Старт с обогревом</div>
+          <div class="settings-label"><label for="di3Cycle">Длина цикла, сек (60-300)</label></div>
+          <div class="settings-control"><input type="number" id="di3Cycle" name="di3_cycle" class="input-narrow" min="60" max="300" step="1" required /></div>
+
+          <div class="settings-label"><label for="di3RampUp">Разгон вентилятора, сек (1-60)</label></div>
+          <div class="settings-control"><input type="number" id="di3RampUp" name="di3_ramp_up" class="input-narrow" min="1" max="60" step="1" required /></div>
+
+          <div class="settings-label"><label for="di3RampDown">Остановка вентилятора (продувка ТЭНа), сек (1-120)</label></div>
+          <div class="settings-control"><input type="number" id="di3RampDown" name="di3_ramp_down" class="input-narrow" min="1" max="120" step="1" required /></div>
+
+          <div class="settings-label"><label for="ch1Imp">Ароматизация, длительность, сек (0-30)</label></div>
           <div class="settings-control"><input type="number" id="ch1Imp" name="ch1_imp" class="input-narrow" min="0" max="30" step="1" required /></div>
 
-          <div class="settings-label"><label for="ao1Max">Ограничение вентилятора, % (1-100)</label></div>
-          <div class="settings-control"><input type="number" id="ao1Max" name="ao1_max" class="input-narrow" min="1" max="100" step="1" required /></div>
+          <div class="settings-group">Ожидание — свет Б (дефлекторы)</div>
+          <div class="settings-label"><label for="ch5Imp">Длительность вспышки, сек (0.1-10)</label></div>
+          <div class="settings-control"><input type="number" id="ch5Imp" name="ch5_imp" class="input-narrow" min="0.1" max="10" step="0.1" required /></div>
 
-          <div class="settings-label"><label for="ao1F1Time">1 фаза обдува, длительность, сек (1-30)</label></div>
-          <div class="settings-control"><input type="number" id="ao1F1Time" name="ao1_f1_time" class="input-narrow" min="1" max="30" step="1" required /></div>
+          <div class="settings-label"><label for="ch5Gap">Пауза между вспышками, сек (0.1-10)</label></div>
+          <div class="settings-control"><input type="number" id="ch5Gap" name="ch5_gap" class="input-narrow" min="0.1" max="10" step="0.1" required /></div>
 
-          <div class="settings-label"><label for="ao1F1Pwr">1 фаза обдува, мощность, % (1-100)</label></div>
-          <div class="settings-control"><input type="number" id="ao1F1Pwr" name="ao1_f1_pwr" class="input-narrow" min="1" max="100" step="1" required /></div>
+          <div class="settings-label"><label for="ch5Count">Вспышек в серии (1-10)</label></div>
+          <div class="settings-control"><input type="number" id="ch5Count" name="ch5_count" class="input-narrow" min="1" max="10" step="1" required /></div>
 
-          <div class="settings-label"><label for="ao1F2Time">2 фаза обдува, длительность, сек (1-30)</label></div>
-          <div class="settings-control"><input type="number" id="ao1F2Time" name="ao1_f2_time" class="input-narrow" min="1" max="30" step="1" required /></div>
+          <div class="settings-label"><label for="ch5Pause">Пауза между сериями, сек (0.1-60)</label></div>
+          <div class="settings-control"><input type="number" id="ch5Pause" name="ch5_pause" class="input-narrow" min="0.1" max="60" step="0.1" required /></div>
 
-          <div class="settings-label"><label for="ao1F2Pwr">2 фаза обдува, мощность, % (1-100)</label></div>
-          <div class="settings-control"><input type="number" id="ao1F2Pwr" name="ao1_f2_pwr" class="input-narrow" min="1" max="100" step="1" required /></div>
+          <div class="settings-group">Ожидание — свет В (цветотерапия)</div>
+          <div class="settings-label"><label for="ch6Imp">Длительность свечения, сек (0.1-60)</label></div>
+          <div class="settings-control"><input type="number" id="ch6Imp" name="ch6_imp" class="input-narrow" min="0.1" max="60" step="0.1" required /></div>
 
-          <div class="settings-label"><label for="ao1F3Time">3 фаза обдува, длительность, сек (1-30)</label></div>
-          <div class="settings-control"><input type="number" id="ao1F3Time" name="ao1_f3_time" class="input-narrow" min="1" max="30" step="1" required /></div>
-
-          <div class="settings-label"><label for="ao1F3Pwr">3 фаза обдува, мощность, % (1-100)</label></div>
-          <div class="settings-control"><input type="number" id="ao1F3Pwr" name="ao1_f3_pwr" class="input-narrow" min="1" max="100" step="1" required /></div>
-
-          <div class="settings-label"><label for="ao1DelayOff">Остановка обдува, сек (1-30)</label></div>
-          <div class="settings-control"><input type="number" id="ao1DelayOff" name="ao1_delay_off" class="input-narrow" min="1" max="30" step="1" required /></div>
-
-          <div class="settings-label"><label for="di7On">Датчик присутствия</label></div>
-          <div class="settings-control"><input type="checkbox" id="di7On" name="di7_on" /></div>
-
-          <div class="settings-label"><label for="presenceOffDelaySec">Задержка отключения по присутствию, сек (1-300)</label></div>
-          <div class="settings-control"><input type="number" id="presenceOffDelaySec" name="presence_off_delay_sec" class="input-narrow" min="1" max="300" step="1" required /></div>
+          <div class="settings-label"><label for="ch6Pause">Пауза, сек (0.1-120)</label></div>
+          <div class="settings-control"><input type="number" id="ch6Pause" name="ch6_pause" class="input-narrow" min="0.1" max="120" step="0.1" required /></div>
         </div>
       </form>
       <p id="algorithmMsg"></p>
@@ -811,6 +822,19 @@ button.relay-btn {
   margin: 0;
 }
 
+/* Заголовок группы внутри таблицы настроек — на всю ширину, поверх обеих колонок. */
+.settings-table .settings-group {
+  grid-column: 1 / -1;
+  padding: 16px 0 6px;
+  font-weight: 600;
+  color: var(--accent);
+  border-bottom: 1px solid var(--border);
+}
+
+.settings-table .settings-group:first-child {
+  padding-top: 4px;
+}
+
 .settings-table input[type="checkbox"] {
   width: 18px;
   height: 18px;
@@ -1018,8 +1042,8 @@ if (fwVerEl) {
       const hours = Math.floor(d.minutes / 60);
       const mins = d.minutes % 60;
       document.getElementById('runtimeText').textContent = hours + ' часов ' + mins + ' минут';
-      document.getElementById('fullCycles').textContent = d.fullCycles;
-      document.getElementById('partialCycles').textContent = d.partialCycles;
+      document.getElementById('noHeatCycles').textContent = d.noHeatCycles;
+      document.getElementById('heatCycles').textContent = d.heatCycles;
 
       if (d.ethLinkUp) {
         document.getElementById('ethMac').textContent = d.ethMac;
@@ -1149,30 +1173,31 @@ if (wifiForm) wifiForm.addEventListener('submit', (e) => { e.preventDefault(); s
 if (authForm) authForm.addEventListener('submit', (e) => { e.preventDefault(); submitSettings(authForm); });
 
 const algorithmForm = document.getElementById('algorithmForm');
-const di7OnCheckbox = document.getElementById('di7On');
 const algorithmResetBtn = document.getElementById('algorithmResetBtn');
 const algorithmMsg = document.getElementById('algorithmMsg');
 
 // Числовые поля алгоритма: id инпута на странице <-> ключ в JSON API <-> имя form-поля
 // при сохранении. Новые числовые настройки достаточно дописать сюда одной строкой.
 const algorithmNumberFields = [
-  ['presenceOffDelaySec', 'presenceOffDelaySec', 'presence_off_delay_sec'],
+  ['ao1Speed', 'ao1Speed', 'ao1_speed'],
   ['di2Cycle', 'di2Cycle', 'di2_cycle'],
+  ['di2RampUp', 'di2RampUp', 'di2_ramp_up'],
+  ['di2RampDown', 'di2RampDown', 'di2_ramp_down'],
+  ['di3Cycle', 'di3Cycle', 'di3_cycle'],
+  ['di3RampUp', 'di3RampUp', 'di3_ramp_up'],
+  ['di3RampDown', 'di3RampDown', 'di3_ramp_down'],
   ['ch1Imp', 'ch1Imp', 'ch1_imp'],
-  ['ao1Max', 'ao1Max', 'ao1_max'],
-  ['ao1F1Time', 'ao1F1Time', 'ao1_f1_time'],
-  ['ao1F1Pwr', 'ao1F1Pwr', 'ao1_f1_pwr'],
-  ['ao1F2Time', 'ao1F2Time', 'ao1_f2_time'],
-  ['ao1F2Pwr', 'ao1F2Pwr', 'ao1_f2_pwr'],
-  ['ao1F3Time', 'ao1F3Time', 'ao1_f3_time'],
-  ['ao1F3Pwr', 'ao1F3Pwr', 'ao1_f3_pwr'],
-  ['ao1DelayOff', 'ao1DelayOff', 'ao1_delay_off'],
+  ['ch5Imp', 'ch5Imp', 'ch5_imp'],
+  ['ch5Gap', 'ch5Gap', 'ch5_gap'],
+  ['ch5Count', 'ch5Count', 'ch5_count'],
+  ['ch5Pause', 'ch5Pause', 'ch5_pause'],
+  ['ch6Imp', 'ch6Imp', 'ch6_imp'],
+  ['ch6Pause', 'ch6Pause', 'ch6_pause'],
 ];
 
 async function loadAlgorithmSettings() {
   const res = await fetch('/api/settings/algorithm');
   const data = await res.json();
-  if (di7OnCheckbox) di7OnCheckbox.checked = data.di7On;
   for (const [elId, jsonKey] of algorithmNumberFields) {
     const el = document.getElementById(elId);
     if (el) el.value = data[jsonKey];
@@ -1185,7 +1210,6 @@ if (algorithmForm) {
   algorithmForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     const params = new URLSearchParams();
-    params.append('di7_on', di7OnCheckbox.checked ? '1' : '0');
     for (const [elId, , formField] of algorithmNumberFields) {
       const el = document.getElementById(elId);
       if (el) params.append(formField, el.value);

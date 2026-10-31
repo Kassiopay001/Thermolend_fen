@@ -14,7 +14,7 @@ void Logic_Init();
 void Logic_Update();
 
 // Наработка и счётчики циклов — только для чтения снаружи (пишет их исключительно
-// сама logic.cpp при остановке цикла), поэтому геттеры, а не extern-переменные.
+// сама logic.cpp по окончании цикла), поэтому геттеры, а не extern-переменные.
 uint32_t Logic_GetRuntimeMinutes();
-uint32_t Logic_GetFullCycles();
-uint32_t Logic_GetPartialCycles();
+uint32_t Logic_GetNoHeatCycles();
+uint32_t Logic_GetHeatCycles();

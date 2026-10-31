@@ -52,50 +52,63 @@ void Settings_ClearStaCredentials() {
   prefs.remove("sta_pass");
 }
 
+// Ключи NVS от прошлых версий (до 2.0.0), которых больше нет в AlgorithmSettings/RuntimeStats —
+// подчищаем при чтении настроек, чтобы не висели во флеше.
+static const char *const OBSOLETE_KEYS[] = {
+  "ch6_inp", "ch6_delay", "di7_on", "di7_delay_off", "ao1_max",
+  "ao1_f1_time", "ao1_f1_pwr", "ao1_f2_time", "ao1_f2_pwr", "ao1_f3_time", "ao1_f3_pwr",
+  "ao1_delay_off", "rt_full", "rt_partial",
+};
+
 AlgorithmSettings Settings_GetAlgorithmSettings() {
   AlgorithmSettings settings;
-  settings.di7.on = prefs.getBool("di7_on", SETTINGS_DEFAULT_DI7_ON);
-  settings.di7.delay_off = prefs.getUShort("di7_delay_off", SETTINGS_DEFAULT_DI7_DELAY_OFF_SEC);
   settings.di2.cycle = prefs.getUShort("di2_cycle", SETTINGS_DEFAULT_DI2_CYCLE_SEC);
+  settings.di2.ramp_up = prefs.getUChar("di2_ramp_up", SETTINGS_DEFAULT_DI2_RAMP_UP_SEC);
+  settings.di2.ramp_down = prefs.getUChar("di2_ramp_down", SETTINGS_DEFAULT_DI2_RAMP_DOWN_SEC);
+  settings.di3.cycle = prefs.getUShort("di3_cycle", SETTINGS_DEFAULT_DI3_CYCLE_SEC);
+  settings.di3.ramp_up = prefs.getUChar("di3_ramp_up", SETTINGS_DEFAULT_DI3_RAMP_UP_SEC);
+  settings.di3.ramp_down = prefs.getUChar("di3_ramp_down", SETTINGS_DEFAULT_DI3_RAMP_DOWN_SEC);
   settings.ch1.imp = prefs.getUChar("ch1_imp", SETTINGS_DEFAULT_CH1_IMP_SEC);
-  settings.ao1.max = prefs.getUChar("ao1_max", SETTINGS_DEFAULT_AO1_MAX_PERCENT);
-  settings.ao1.f1_time = prefs.getUChar("ao1_f1_time", SETTINGS_DEFAULT_AO1_F1_TIME_SEC);
-  settings.ao1.f1_pwr = prefs.getUChar("ao1_f1_pwr", SETTINGS_DEFAULT_AO1_F1_PWR_PERCENT);
-  settings.ao1.f2_time = prefs.getUChar("ao1_f2_time", SETTINGS_DEFAULT_AO1_F2_TIME_SEC);
-  settings.ao1.f2_pwr = prefs.getUChar("ao1_f2_pwr", SETTINGS_DEFAULT_AO1_F2_PWR_PERCENT);
-  settings.ao1.f3_time = prefs.getUChar("ao1_f3_time", SETTINGS_DEFAULT_AO1_F3_TIME_SEC);
-  settings.ao1.f3_pwr = prefs.getUChar("ao1_f3_pwr", SETTINGS_DEFAULT_AO1_F3_PWR_PERCENT);
-  settings.ao1.delay_off = prefs.getUChar("ao1_delay_off", SETTINGS_DEFAULT_AO1_DELAY_OFF_SEC);
-  if (prefs.isKey("ch6_inp")) prefs.remove("ch6_inp");     // канал CH6 больше не настраивается
-  if (prefs.isKey("ch6_delay")) prefs.remove("ch6_delay"); // подчищаем то, что могло остаться от старой версии
+  settings.ch5.imp = prefs.getUShort("ch5_imp", SETTINGS_DEFAULT_CH5_IMP_DS);
+  settings.ch5.gap = prefs.getUShort("ch5_gap", SETTINGS_DEFAULT_CH5_GAP_DS);
+  settings.ch5.count = prefs.getUChar("ch5_count", SETTINGS_DEFAULT_CH5_COUNT);
+  settings.ch5.pause = prefs.getUShort("ch5_pause", SETTINGS_DEFAULT_CH5_PAUSE_DS);
+  settings.ch6.imp = prefs.getUShort("ch6_imp", SETTINGS_DEFAULT_CH6_IMP_DS);
+  settings.ch6.pause = prefs.getUShort("ch6_pause", SETTINGS_DEFAULT_CH6_PAUSE_DS);
+  settings.ao1.speed = prefs.getUChar("ao1_speed", SETTINGS_DEFAULT_AO1_SPEED_PERCENT);
+  for (const char *key : OBSOLETE_KEYS) {
+    if (prefs.isKey(key)) prefs.remove(key);
+  }
   return settings;
 }
 
 void Settings_SetAlgorithmSettings(const AlgorithmSettings &settings) {
-  prefs.putBool("di7_on", settings.di7.on);
-  prefs.putUShort("di7_delay_off", settings.di7.delay_off);
   prefs.putUShort("di2_cycle", settings.di2.cycle);
+  prefs.putUChar("di2_ramp_up", settings.di2.ramp_up);
+  prefs.putUChar("di2_ramp_down", settings.di2.ramp_down);
+  prefs.putUShort("di3_cycle", settings.di3.cycle);
+  prefs.putUChar("di3_ramp_up", settings.di3.ramp_up);
+  prefs.putUChar("di3_ramp_down", settings.di3.ramp_down);
   prefs.putUChar("ch1_imp", settings.ch1.imp);
-  prefs.putUChar("ao1_max", settings.ao1.max);
-  prefs.putUChar("ao1_f1_time", settings.ao1.f1_time);
-  prefs.putUChar("ao1_f1_pwr", settings.ao1.f1_pwr);
-  prefs.putUChar("ao1_f2_time", settings.ao1.f2_time);
-  prefs.putUChar("ao1_f2_pwr", settings.ao1.f2_pwr);
-  prefs.putUChar("ao1_f3_time", settings.ao1.f3_time);
-  prefs.putUChar("ao1_f3_pwr", settings.ao1.f3_pwr);
-  prefs.putUChar("ao1_delay_off", settings.ao1.delay_off);
+  prefs.putUShort("ch5_imp", settings.ch5.imp);
+  prefs.putUShort("ch5_gap", settings.ch5.gap);
+  prefs.putUChar("ch5_count", settings.ch5.count);
+  prefs.putUShort("ch5_pause", settings.ch5.pause);
+  prefs.putUShort("ch6_imp", settings.ch6.imp);
+  prefs.putUShort("ch6_pause", settings.ch6.pause);
+  prefs.putUChar("ao1_speed", settings.ao1.speed);
 }
 
 RuntimeStats Settings_GetRuntimeStats() {
   RuntimeStats stats;
   stats.minutes = prefs.getUInt("rt_minutes", 0);
-  stats.fullCycles = prefs.getUInt("rt_full", 0);
-  stats.partialCycles = prefs.getUInt("rt_partial", 0);
+  stats.noHeatCycles = prefs.getUInt("rt_noheat", 0);
+  stats.heatCycles = prefs.getUInt("rt_heat", 0);
   return stats;
 }
 
 void Settings_SetRuntimeStats(const RuntimeStats &stats) {
   prefs.putUInt("rt_minutes", stats.minutes);
-  prefs.putUInt("rt_full", stats.fullCycles);
-  prefs.putUInt("rt_partial", stats.partialCycles);
+  prefs.putUInt("rt_noheat", stats.noHeatCycles);
+  prefs.putUInt("rt_heat", stats.heatCycles);
 }

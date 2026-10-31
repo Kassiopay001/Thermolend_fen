@@ -4,24 +4,24 @@
 #include "settings.h"
 
 // DI1 Аварийная остановка
-// DI2 Кнопка старт/стоп
-// DI3 Не используется
-// DI4 Кнопка вкл/выкл хромотерапии
-// DI5 Кнопка вкл/выкл нагрев
-// DI6 Кнопка понижения потока воздуха
-// DI7 Датчик присутствия
+// DI2 Кнопка старт без обогрева
+// DI3 Кнопка старт с обогревом
+// DI4 Не используется
+// DI5 Не используется
+// DI6 Не используется
+// DI7 Не используется
 // DI8 Не используется
 //
 // CH1 Управление ароматизацией
-// CH2 Подсветка кнопки старт/стоп
-// CH3 Не используется
-// CH4 Подсветка кнопки вкл/выкл хромотерапии
-// CH5 Подсветка кнопки вкл/выкл нагрев
-// CH6 Подсветка кнопки понижения потока
-// CH7 Управление хромотерапией
-// CH8 Управление нагревом
+// CH2 Подсветка кнопки старт без обогрева
+// CH3 Подсветка кнопки старт с обогревом
+// CH4 Световой контур А (контур человека)
+// CH5 Световой контур Б (дефлекторы)
+// CH6 Световой контур В (цветотерапия)
+// CH7 Включение нагрева
+// CH8 Включение вентилятора (пуск частотника, скорость задаёт AO1)
 //
-// AO1 Управление скоростью потока воздуха
+// AO1 Скорость вентилятора (аналоговый вход частотника)
 //
 // Peripherals_ReadInput(index);       // Прочитать состояние одного входа (index 0-7 = DI1-DI8)
 // Peripherals_ReadAllInputs();        // Прочитать состояние всех входов одной битовой маской
@@ -36,393 +36,235 @@
 // в settings.h/AlgorithmSettings. Здесь только определение переменной.
 AlgorithmSettings logic_set;
 
-static DebouncedButton startStopBtn;     // DI2
-static DebouncedButton chromotherapyBtn; // DI4
-static DebouncedButton heatingBtn;       // DI5
-static DebouncedButton airflowDownBtn;   // DI6
-static bool presenceWasActive = false;   // DI7 — для определения фронта (пришёл/ушёл)
+// Три состояния системы:
+// MODE_IDLE    — не активна, привлекает внимание: А горит, Б мигает сериями, В — импульсами,
+//                подсветки кнопок погашены. Обе кнопки работают — в том числе пока вентилятор
+//                ещё плавно останавливается после цикла.
+// MODE_NO_HEAT — старт без обогрева (DI2): только вентилятор, весь свет погашен, горит CH2.
+//                DI2 игнорируется, DI3 переводит в MODE_HEAT с отсчётом цикла заново.
+// MODE_HEAT    — старт с обогревом (DI3): Б и В горят постоянно, аромат первые CH1.imp сек,
+//                нагрев вместе с вентилятором, горит CH3. Кнопки игнорируются.
+// По окончании цикла — сразу MODE_IDLE (свет уже по программе ожидания), а вентилятор
+// параллельно плавно останавливается за DIx.ramp_down своего режима.
+enum LogicMode { MODE_IDLE, MODE_NO_HEAT, MODE_HEAT };
+static LogicMode mode = MODE_IDLE;
+static uint32_t cycleElapsedMs = 0; // сколько идёт текущий цикл (MODE_NO_HEAT/MODE_HEAT)
+
+static DebouncedButton noHeatBtn;        // DI2
+static DebouncedButton heatBtn;          // DI3
 static bool emergencyStopActive = false; // DI1 — для определения фронта (сработала/снята)
 
-// DI6 — понижение оборотов вентилятора, надстройка НАД AO1.max. Каждое нажатие переключает
-// по кругу: 100% -> 75% -> 50% -> 25% -> 100%... Нигде не сохраняется (не настройка, а разовая
-// ручная подстройка на время текущего цикла) и сбрасывается на 100% при каждом старте (DI2).
-static const uint8_t DI6_LEVELS[4] = {100, 75, 50, 25};
-static uint8_t di6LevelIndex = 0;
+// Время между вызовами Logic_Update() — по нему тикают цикл, наработка и вентилятор. Именно
+// накоплением, а не от millis() на старте цикла: пока открыта страница "Тест", логика стоит,
+// и цикл вместе с ней тоже должен стоять, а не досчитываться задним числом.
+static unsigned long lastUpdateMs = 0;
 
-// Состояние цикла (между Старт и Стоп) — вся обработка ниже сделана простыми счётчиками
-// внутри самого Logic_Update(), без отдельных функций: cycleActive держит, пока CH7/8
-// живьём следуют за CH4/5; cycleRemainingSec — отсчёт длины самого цикла (DI2.cycle);
-// aromaRemainingSec — сколько ещё секунд гореть CH1 (импульс ароматизации); fanPhase/
-// fanPhaseElapsedSec/... — разгон AO1 по трём фазам; fanRampDownActive/... — плавное
-// гашение AO1 после остановки цикла. Всё это тикает раз в секунду в блоке "Основная логика
-// принятия решений" ниже — секундная точность тут более чем достаточна, а отдельные функции
-// ради этого не нужны.
-static bool cycleActive = false;
-static uint16_t cycleRemainingSec = 0;  // отсчёт длины цикла, секунд (DI2.cycle)
-static uint8_t aromaRemainingSec = 0;   // 0 = импульс CH1 сейчас не идёт
-static uint8_t fanPhase = 0;            // 0 = разгон не идёт/завершён, 1/2/3 = текущая фаза
-static uint8_t fanPhaseElapsedSec = 0;  // сколько секунд уже прошло в текущей фазе
-static uint8_t fanPhaseStartPct = 0;    // % мощности в начале текущей фазы
-static uint8_t fanPhaseTargetPct = 0;   // % мощности — цель текущей фазы
-static uint8_t fanPhaseDurationSec = 0; // длительность текущей фазы, сек
+// Вентилятор: fanPct — текущая мощность, %, плавно идёт к fanTargetPct со скоростью
+// fanRatePctPerSec. Считается каждый вызов (а не раз в секунду), чтобы AO1 менялся ровно.
+// - Разгон: цель AO1.speed, темп AO1.speed / DIx.ramp_up в секунду — с нуля ровно за ramp_up.
+//   Если вентилятор уже крутится (DI3 нажали на разгоне без обогрева, старт во время
+//   остановки) — тем же темпом от текущей мощности, без сброса в 0.
+// - Остановка: цель 0, темп "мощность на момент окончания / DIx.ramp_down" — ровно за ramp_down
+//   от любой мощности, чтобы ТЭН продувался всё заданное время.
+// CH8 (пуск частотника) включён, пока есть цель или вентилятор ещё не доехал до нуля.
+static float fanPct = 0;
+static uint8_t fanTargetPct = 0;
+static float fanRatePctPerSec = 0;
 
-static bool fanRampDownActive = false;      // идёт плавное гашение AO1 после остановки цикла
-static uint8_t fanRampDownStartPwm = 0;     // значение ШИМ (0-255) на момент остановки
-static uint8_t fanRampDownElapsedSec = 0;   // сколько секунд уже прошло в гашении
-static uint8_t fanRampDownDurationSec = 0;  // = logic_set.ao1.delay_off на момент запуска
+// Программа мигания в ожидании: серия из count вспышек по imp с паузами gap между ними, затем
+// pause, и заново. Свет В (CH6) — та же программа с count = 1 (gap тогда не участвует). Все
+// времена — x0.1 сек, как в настройках. Каждый вход в ожидание начинает со вспышки.
+struct LightProgram {
+  bool on;
+  uint8_t flashNo;      // номер текущей вспышки в серии, с 1
+  unsigned long stepMs; // момент начала текущей вспышки/паузы
+};
+static LightProgram ch5Program; // свет Б
+static LightProgram ch6Program; // свет В
 
-// CH6 — подсветка кнопки DI6 (понижение потока воздуха). Включается/выключается вместе с
-// CH4/CH5 (те же события: приход/уход по датчику присутствия DI7, старт/остановка
-// цикла) — ch6BacklightOn держит это "групповое" желаемое состояние. Поверх него, пока DI6
-// физически зажата, CH6 гасится (визуальная реакция на нажатие) — см. пересчёт в
-// Logic_Update() ниже, который применяет это каждый вызов, а не раз в секунду, чтобы
-// реакция на нажатие была мгновенной.
-static bool ch6BacklightOn = false;
+static void LightProgram_Start(LightProgram &p) {
+  p.on = true;
+  p.flashNo = 1;
+  p.stepMs = millis();
+}
 
-// Наработка (время реальной работы цикла, не аптайм устройства) и счётчики циклов —
-// статистика для страницы "Инфо", копится в RAM и пишется в NVS только в момент остановки
-// цикла (см. StopCycle). Чаще писать незачем: длина цикла ограничена сверху logic_set.di2.cycle
-// (максимум 300 сек = 5 минут), так что накопить есть чему только в пределах одного цикла, а
-// цикл в любом случае заканчивается через StopCycle(). runtimeMinutesTotal — источник истины
-// для отображения, обновляется сразу по факту (не только после записи в NVS).
-static uint32_t runtimeMinutesTotal = 0;    // суммарная наработка, мин
-static uint16_t runtimeSecondsInMinute = 0; // 0-59, секунды текущей неполной минуты
-static uint32_t fullCyclesTotal = 0;        // циклы, отработавшие полностью (до конца DI2.cycle)
-static uint32_t partialCyclesTotal = 0;     // циклы, прерванные раньше (Стоп/уход человека)
+// count сравнивается через "<", а не "==", чтобы уменьшение числа вспышек в настройках прямо
+// посреди серии не сломало счёт — просто начнётся пауза между сериями.
+static void LightProgram_Service(LightProgram &p, uint16_t imp, uint16_t gap, uint8_t count, uint16_t pause) {
+  uint16_t stepDs = p.on ? imp : (p.flashNo < count ? gap : pause);
+  if (millis() - p.stepMs < stepDs * 100UL) return;
+  p.stepMs = millis();
+  if (p.on) {
+    p.on = false;
+  } else {
+    p.on = true;
+    p.flashNo = p.flashNo < count ? p.flashNo + 1 : 1;
+  }
+}
+
+// Все 8 реле под логикой — собираем маску и пишем одним махом и только при изменении: каждая
+// запись — обмен по I2C, а Logic_Update() крутится в loop() без задержек. -1 — "неизвестно, что
+// сейчас на реле" (при старте и после страницы "Тест"), тогда пишем гарантированно.
+static int16_t relayMaskWritten = -1;
+
+static void WriteRelays(uint8_t mask) {
+  if (mask == relayMaskWritten) return;
+  Peripherals_SetAllRelays(mask);
+  relayMaskWritten = mask;
+}
+
+// Наработка (время реальной работы цикла, не аптайм устройства, остановка вентилятора после
+// цикла не в счёт) и счётчики циклов — статистика для страницы "Инфо". Копится в RAM, в NVS
+// пишется только по окончании цикла (EndCycle) и при прерывании его аварией: длина цикла
+// ограничена сверху (DIx.cycle, максимум 5 минут), чаще писать незачем. Цикл засчитывается,
+// только если отработал до конца; цикл без обогрева, переключённый на обогрев, идёт в счётчик
+// "с обогревом"; прерванный аварией не засчитывается никуда.
+static uint32_t runtimeMinutesTotal = 0; // суммарная наработка, мин
+static uint32_t runtimeMsInMinute = 0;   // 0-59999, мс текущей неполной минуты
+static uint32_t noHeatCyclesTotal = 0;   // циклов без обогрева
+static uint32_t heatCyclesTotal = 0;     // циклов с обогревом
 
 uint32_t Logic_GetRuntimeMinutes() { return runtimeMinutesTotal; }
-uint32_t Logic_GetFullCycles() { return fullCyclesTotal; }
-uint32_t Logic_GetPartialCycles() { return partialCyclesTotal; }
+uint32_t Logic_GetNoHeatCycles() { return noHeatCyclesTotal; }
+uint32_t Logic_GetHeatCycles() { return heatCyclesTotal; }
 
-// Полная остановка цикла — гасит вообще всё, что цикл включал: обе группы подсветок
-// (CH2 и CH4/5), CH6 (подсветка DI6 — гасится тут же, вместе с CH4/5) и CH7/CH8 — сразу.
-// Ароматизация (CH1) гасится сразу; вентилятор (AO1) — не резко, а плавно от
-// текущего значения до 0 за logic_set.ao1.delay_off секунд (см. fanRampDown* и decision-блок
-// ниже). Используется в трёх местах: явное нажатие Стоп без датчика присутствия, автоматическое
-// истечение задержки присутствия (человек ушёл и не вернулся) и истечение времени самого
-// цикла (DI2.cycle) — для всех это одно и то же событие "цикл закончен", поэтому не
-// дублируем логику остановки. completedFully — цикл дошёл до конца сам (таймер DI2.cycle) или
-// был прерван раньше (Стоп/уход человека) — от этого зависит, в какой из двух счётчиков
-// циклов он попадёт.
-static void CancelLightsOffDelay(); // определена ниже — нужна здесь, чтобы снять зависшую
-                                     // задержку, если цикл уже закончился другим путём раньше
-static void StopCycle(bool completedFully) {
-  cycleActive = false;
-  cycleRemainingSec = 0;
-  CancelLightsOffDelay(); // на случай, если задержка присутствия ещё висит с этого же цикла
-  Peripherals_SetRelay(0, false); // CH1
-  Peripherals_SetRelay(1, false); // CH2
-  Peripherals_SetRelay(3, false); // CH4
-  Peripherals_SetRelay(4, false); // CH5
-  Peripherals_SetRelay(6, false); // CH7
-  Peripherals_SetRelay(7, false); // CH8
-  ch6BacklightOn = false; // CH6 — подсветка DI6, гасится вместе с CH4/5
-  aromaRemainingSec = 0;
-  fanPhase = 0; // прекращаем разгон, если он ещё шёл
-
-  fanRampDownStartPwm = Peripherals_GetAnalogOut();
-  fanRampDownElapsedSec = 0;
-  fanRampDownDurationSec = logic_set.ao1.delay_off;
-  fanRampDownActive = fanRampDownStartPwm > 0;
-  if (!fanRampDownActive) Peripherals_SetAnalogOut(0); // уже 0 — гасить нечего
-
-  if (completedFully) fullCyclesTotal++; else partialCyclesTotal++;
-  RuntimeStats stats = {runtimeMinutesTotal, fullCyclesTotal, partialCyclesTotal};
+static void SaveRuntimeStats() {
+  RuntimeStats stats = {runtimeMinutesTotal, noHeatCyclesTotal, heatCyclesTotal};
   Settings_SetRuntimeStats(stats);
 }
 
-// Общий отложенный выключатель — запускается и потерей присутствия (DI7), и нажатием Стоп
-// (DI2) при включённом датчике присутствия, чтобы не дублировать одну и ту же задержку/
-// отмену в двух местах. НО: DI7 вооружает его при ЛЮБОЙ потере присутствия, даже когда
-// никакой цикл не идёт (предцикловая подсветка "человек подошёл/отошёл", либо цикл уже
-// закончился сам, а человек просто ещё не встал) — в этом случае по истечении задержки
-// нужно просто погасить CH4/5, а НЕ считать это остановкой цикла (иначе один и тот же
-// визит задвоится в статистике и лишний раз запишется в NVS). Поэтому at arm-time запоминаем
-// forCycleStop — было ли это вооружено ради реально идущего цикла.
-static bool lightsOffPending = false;      // идёт отсчёт
-static bool lightsOffIsCycleStop = false;  // true — по истечении звать StopCycle(), false — просто погасить подсветку
-static unsigned long lightsOffArmedMs = 0; // момент, когда отсчёт был запущен
-
-static void ArmLightsOffDelay(bool forCycleStop) {
-  if (!lightsOffPending) { // не перезапускаем отсчёт заново, если он уже идёт
-    lightsOffPending = true;
-    lightsOffArmedMs = millis();
-    lightsOffIsCycleStop = forCycleStop;
-  }
+static void EnterIdle() {
+  mode = MODE_IDLE;
+  LightProgram_Start(ch5Program);
+  LightProgram_Start(ch6Program);
 }
 
-static void CancelLightsOffDelay() {
-  lightsOffPending = false;
+// Старт цикла — и из ожидания, и переключение без обогрева -> с обогревом (отсчёт заново,
+// аромат тоже заново). Вентилятор подхватит разгон сам в Logic_Update() — см. fanPct.
+static void StartCycle(LogicMode newMode) {
+  mode = newMode;
+  cycleElapsedMs = 0;
 }
 
-static void ServiceLightsOffDelay() {
-  if (lightsOffPending && millis() - lightsOffArmedMs >= (unsigned long)logic_set.di7.delay_off * 1000UL) {
-    lightsOffPending = false;
-    if (lightsOffIsCycleStop) {
-      StopCycle(false); // прервано — задержка присутствия истекла, человек не вернулся
-    } else {
-      // Цикл не идёт (предцикловая подсветка либо уже отработавший цикл) — гасим только
-      // подсветку, статистику и остальное оборудование не трогаем.
-      Peripherals_SetRelay(3, false); // CH4
-      Peripherals_SetRelay(4, false); // CH5
-      ch6BacklightOn = false; // CH6 — подсветка DI6, гасится вместе с CH4/5
-    }
+// Цикл отработал до конца (DIx.cycle истёк): засчитываем, пишем статистику, вентилятор — на
+// плавную остановку за ramp_down своего режима, сами — сразу в ожидание.
+static void EndCycle() {
+  uint8_t rampDownSec;
+  if (mode == MODE_HEAT) {
+    heatCyclesTotal++;
+    rampDownSec = logic_set.di3.ramp_down;
+  } else {
+    noHeatCyclesTotal++;
+    rampDownSec = logic_set.di2.ramp_down;
   }
+  SaveRuntimeStats();
+  fanTargetPct = 0;
+  fanRatePctPerSec = fanPct / (rampDownSec ? rampDownSec : 1);
+  EnterIdle();
 }
 
 void Logic_Init() {
   logic_set = Settings_GetAlgorithmSettings();
   RuntimeStats stats = Settings_GetRuntimeStats();
   runtimeMinutesTotal = stats.minutes;
-  fullCyclesTotal = stats.fullCycles;
-  partialCyclesTotal = stats.partialCycles;
-}
-
-// Считает и применяет реальный ШИМ AO1 из "базового" процента мощности (либо текущей точки
-// разгона, либо уже устоявшегося значения после его окончания) с учётом AO1.max и ручной
-// подстройки DI6. Общая для разгона и для устоявшегося состояния ПОСЛЕ него — иначе DI6,
-// нажатый уже после того, как разгон закончился, было бы не к чему применить (ровно тот баг,
-// который сейчас чиним).
-static void ApplyFanOutputPercent(uint8_t basePct) {
-  float_t limitedPct = basePct * (logic_set.ao1.max / 100.0f);
-  limitedPct = limitedPct * (DI6_LEVELS[di6LevelIndex] / 100.0f);
-  Peripherals_SetAnalogOut((uint8_t)(limitedPct * 255UL / 100UL));
+  noHeatCyclesTotal = stats.noHeatCycles;
+  heatCyclesTotal = stats.heatCycles;
+  lastUpdateMs = millis();
+  EnterIdle();
 }
 
 void Logic_Update() {
+  unsigned long now = millis();
+  uint32_t dtMs = now - lastUpdateMs;
+  lastUpdateMs = now;
+
   // licenseOk объявлен в peripherals.h — пока устройство не активировано, алгоритм стоит
-  // целиком (иначе нажатия DI2 копили бы пустые циклы в статистике NVS), а сами выходы
+  // целиком (иначе нажатия кнопок копили бы пустые циклы в статистике NVS), а сами выходы
   // заглушены в Peripherals_Set*. Проверка раньше testModeActive — тест тоже не в обход.
   if (!licenseOk) return;
 
   // testModeActive объявлен в peripherals.h — пока true, страница "Тест" (/io)
-  // держит выходы под ручным управлением, алгоритм ниже их не трогает.
-  if (testModeActive) return;
+  // держит выходы под ручным управлением, алгоритм ниже их не трогает. После выхода из теста
+  // реле переписываем заново — что там оставила страница, неизвестно.
+  if (testModeActive) {
+    relayMaskWritten = -1;
+    return;
+  }
 
-  // Быстрая проверка входов — каждый вызов Logic_Update(), без задержек.
+  // Кнопки опрашиваем всегда, даже когда нажатие будет проигнорировано (авария, цикл с
+  // обогревом) — иначе зажатая в это время кнопка сработала бы потом сама.
+  bool noHeatPressed = Peripherals_ButtonHeld(noHeatBtn, Peripherals_ReadInput(1), PERIPH_BUTTON_DEBOUNCE_MS);
+  bool heatPressed = Peripherals_ButtonHeld(heatBtn, Peripherals_ReadInput(2), PERIPH_BUTTON_DEBOUNCE_MS);
+
   // DI1 — цепь аварийной остановки, в норме замкнута (true); при размыкании (false) — авария.
+  // Гасим всё резко, включая вентилятор (без плавной остановки) и нагрев. Прерванный цикл не
+  // засчитывается, но наработку по нему сохраняем. При снятии аварии — в ожидание.
   if (!Peripherals_ReadInput(0)) {
     if (!emergencyStopActive) {
-      // Авария только что сработала — полностью сбрасываем цикл (как будто он прервался):
-      // подсветки, CH7/8, ароматизация, счётчики (незавершённый цикл), запись в NVS.
-      StopCycle(false);
-      // В обычной остановке AO1 гасится ПЛАВНО (fanRampDown) — тут нужно РЕЗКО, отменяем.
-      fanRampDownActive = false;
-      Peripherals_SetAnalogOut(0);
-      ch6BacklightOn = false; // CH6 — подсветка DI6, тоже гасится аварией
+      if (mode != MODE_IDLE) SaveRuntimeStats();
+      mode = MODE_IDLE;
+      fanPct = 0;
+      fanTargetPct = 0;
       emergencyStopActive = true;
     }
-    // Пока авария активна: жёстко держим все реле и AO1 в нуле, чтобы ничего не включилось
-    // раньше времени. При снятии аварии cycleActive уже false — само ничего не запустится,
-    // нужен новый ручной Старт.
-    Peripherals_SetRelay(0, false); // CH1
-    Peripherals_SetRelay(1, false); // CH2
-    Peripherals_SetRelay(3, false); // CH4
-    Peripherals_SetRelay(4, false); // CH5
-    Peripherals_SetRelay(5, false); // CH6
-    Peripherals_SetRelay(6, false); // CH7
-    Peripherals_SetRelay(7, false); // CH8
+    WriteRelays(0);
     Peripherals_SetAnalogOut(0);
     return;
   }
-  emergencyStopActive = false;
-
-  // DI7 — датчик присутствия: logic_set.di7.on говорит, физически ли он установлен.
-  // Если его нет — весь блок ниже просто не выполняется, CH4/CH5 полностью
-  // отдаются кнопкам DI4/DI5 без вмешательства логики присутствия.
-  if (logic_set.di7.on) {
-    // При замыкании (человек пришёл) сразу включаем подсветку кнопок и отменяем
-    // отложенное выключение, если оно шло (например, было запущено кнопкой Стоп, а человек
-    // никуда не уходил или успел вернуться). При размыкании (человек ушёл) — не гасим сразу,
-    // а запускаем общий отложенный выключатель (см. ArmLightsOffDelay выше), который через
-    // logic_set.di7.delay_off секунд выключит CH4/CH5, если человек не вернётся.
-    bool presenceActive = Peripherals_ReadInput(6);
-    if (presenceActive) {
-      if (!presenceWasActive) { // человек только что пришёл (или вернулся)
-        Peripherals_SetRelay(3, true); // CH4
-        Peripherals_SetRelay(4, true); // CH5
-        ch6BacklightOn = true; // CH6 — подсветка DI6, вместе с CH4/5
-        CancelLightsOffDelay();
-      }
-    } else if (presenceWasActive) { // человек только что пропал — запускаем отсчёт задержки
-      // forCycleStop = cycleActive: если цикл сейчас реально идёт, по истечении задержки это
-      // его прерывание (StopCycle). Если цикла нет (предцикловая подсветка либо цикл уже
-      // закончился сам, а человек просто ещё не встал) — по истечении просто гасим подсветку,
-      // не считаем это отдельным (лишним) циклом и не пишем в NVS.
-      ArmLightsOffDelay(cycleActive);
-    }
-    presenceWasActive = presenceActive;
+  if (emergencyStopActive) {
+    emergencyStopActive = false;
+    EnterIdle();
   }
 
-  // DI2 — кнопка старт/стоп: та же механика антидребезга, что и у DI4/DI5, но
-  // включаем/выключаем ей CH2 (собственную подсветку). Особые случаи с CH4/CH5:
-  // - без датчика присутствия (logic_set.di7.on == false) кнопка ими управляет полностью
-  //   сама — включает сразу при старте, гасит сразу при стопе;
-  // - с датчиком присутствия ими управляет он, кнопка тут ничего не включает и не гасит
-  //   напрямую, а лишь запускает тот же отложенный выключатель, что и уход человека (Стоп),
-  //   либо отменяет его, если он шёл (Старт передумали нажать).
-  if (Peripherals_ButtonHeld(startStopBtn, Peripherals_ReadInput(1), PERIPH_BUTTON_DEBOUNCE_MS)) {
-    bool turningOn = !Peripherals_GetRelay(1); // CH2 сейчас выключен — значит, включаем цикл
-    Peripherals_SetRelay(1, !Peripherals_GetRelay(1)); // CH2
-    if (turningOn) {
-      if (!logic_set.di7.on) {
-        Peripherals_SetRelay(3, true); // CH4
-        Peripherals_SetRelay(4, true); // CH5
-        ch6BacklightOn = true; // CH6 — подсветка DI6, вместе с CH4/5
-      }
-      CancelLightsOffDelay();
-      cycleActive = true;
-      cycleRemainingSec = logic_set.di2.cycle; // отсчёт длины цикла, досчитывает decision-блок ниже
-      fanRampDownActive = false; // на случай, если предыдущее гашение ещё не успело завершиться
-      di6LevelIndex = 0; // DI6 — каждый новый цикл стартует на 100% оборотов
-
-      // Ароматизация — включаем CH1 сразу, досчитывает секунды decision-блок ниже.
-      aromaRemainingSec = logic_set.ch1.imp;
-      Peripherals_SetRelay(0, aromaRemainingSec > 0); // CH1
-
-      // Разгон вентилятора — запускаем 1-ю фазу, дальше её продвигает decision-блок ниже.
-      fanPhase = 1;
-      fanPhaseElapsedSec = 0;
-      fanPhaseStartPct = 0;
-      fanPhaseTargetPct = logic_set.ao1.f1_pwr;
-      fanPhaseDurationSec = logic_set.ao1.f1_time;
-    } else if (!logic_set.di7.on) {
-      // Без датчика присутствия некому потом досчитать задержку — останавливаем цикл сразу
-      // и полностью (см. StopCycle выше): подсветки, CH6/7/8, ароматизация, вентилятор.
-      StopCycle(false); // прервано вручную кнопкой Стоп
-    } else {
-      // С датчиком — сразу гасим только CH7/CH8, остальное (подсветки CH4/5/6,
-      // ароматизация, вентилятор) остановит ServiceLightsOffDelay() ниже, когда истечёт
-      // задержка присутствия, если человек не вернётся раньше.
-      cycleActive = false;
-      Peripherals_SetRelay(6, false); // CH7
-      Peripherals_SetRelay(7, false); // CH8
-      ArmLightsOffDelay(true); // это реальная остановка цикла, а не предцикловая подсветка
-    }
+  // DI3 работает из ожидания и из цикла без обогрева (отсчёт заново), DI2 — только из ожидания.
+  if (heatPressed && mode != MODE_HEAT) {
+    StartCycle(MODE_HEAT);
+  } else if (noHeatPressed && mode == MODE_IDLE) {
+    StartCycle(MODE_NO_HEAT);
   }
 
-  // Обслуживаем отсчёт отложенного выключения каждый вызов — вне троттлинга ниже, т.к. это
-  // времязависимая логика (см. комментарий про быстрый/медленный уровни у DI4/5 выше).
-  ServiceLightsOffDelay();
-
-  // CH6 — подсветка кнопки DI6: следует за ch6BacklightOn (см. её определение выше — те же
-  // события, что включают/гасят CH4/5), но пока DI6 физически зажата — гасится, вне
-  // зависимости от ch6BacklightOn. Считаем каждый вызов (не в decision-блоке раз в секунду),
-  // чтобы реакция на нажатие была мгновенной, без встроенного антидребезга — короткое
-  // дребезжание контактов на подсветке не критично, в отличие от переключения уровня ниже.
-  Peripherals_SetRelay(5, ch6BacklightOn && !Peripherals_ReadInput(5)); // CH6
-
-  // DI4 — кнопка хромотерапии: та же механика, переключаем её собственную подсветку CH4.
-  if (Peripherals_ButtonHeld(chromotherapyBtn, Peripherals_ReadInput(3), PERIPH_BUTTON_DEBOUNCE_MS)) {
-    Peripherals_SetRelay(3, !Peripherals_GetRelay(3)); // CH4
-  }
-
-  // DI5 — кнопка нагрева: та же механика, переключаем её собственную подсветку CH5.
-  if (Peripherals_ButtonHeld(heatingBtn, Peripherals_ReadInput(4), PERIPH_BUTTON_DEBOUNCE_MS)) {
-    Peripherals_SetRelay(4, !Peripherals_GetRelay(4)); // CH5
-  }
-
-  // DI6 — кнопка понижения потока воздуха: та же механика антидребезга, но вместо реле
-  // переключает по кругу di6LevelIndex (100/75/50/25%) — применяется в разгоне вентилятора
-  // ниже как надстройка над AO1.max. Сброс на 100% — только при новом старте цикла (DI2).
-  // Собственная подсветка этой кнопки (CH6) в этот антидребезг не завязана — см. выше.
-  if (Peripherals_ButtonHeld(airflowDownBtn, Peripherals_ReadInput(5), PERIPH_BUTTON_DEBOUNCE_MS)) {
-    di6LevelIndex = (di6LevelIndex + 1) % 4;
-  }
-
-  // Основная логика принятия решений — не чаще 1 раза в секунду.
-  static unsigned long lastDecisionMs = 0;
-  if (millis() - lastDecisionMs < 1000) return;
-  lastDecisionMs = millis();
-
-  // Пока цикл активен, CH7/CH8 (реальные исполнительные выходы) живьём следуют за CH4/CH5
-  // (лампочки кнопок) — переключили кнопку во время цикла, через (максимум) секунду
-  // поменяется и выход. CH6 сюда не входит — она считается каждый вызов отдельной строкой
-  // выше, а не в этом секундном decision-блоке. При остановке цикла CH7/8 гасятся сразу в
-  // блоке DI2 выше.
-  if (cycleActive) {
-    Peripherals_SetRelay(6, Peripherals_GetRelay(3)); // CH7 = CH4
-    Peripherals_SetRelay(7, Peripherals_GetRelay(4)); // CH8 = CH5
-
-    // Наработка — секунды реальной работы цикла, полные минуты сразу видны на "Инфо"
-    // (runtimeMinutesTotal — источник истины для отображения); в NVS попадёт при StopCycle.
-    runtimeSecondsInMinute++;
-    if (runtimeSecondsInMinute >= 60) {
-      runtimeSecondsInMinute = 0;
+  if (mode != MODE_IDLE) {
+    cycleElapsedMs += dtMs;
+    runtimeMsInMinute += dtMs;
+    if (runtimeMsInMinute >= 60000UL) {
+      runtimeMsInMinute -= 60000UL;
       runtimeMinutesTotal++;
     }
-
-    // Таймер самого цикла — считаем от logic_set.di2.cycle секунд, заведённых при старте.
-    // Как только время вышло — это то же самое, что нажать Стоп или что человек ушёл, но
-    // цикл в этом случае отработал полностью сам, поэтому и счётчик другой.
-    if (cycleRemainingSec > 0) {
-      cycleRemainingSec--;
-      if (cycleRemainingSec == 0) StopCycle(true); // отработал сам, до конца
-    }
+    uint16_t cycleSec = mode == MODE_HEAT ? logic_set.di3.cycle : logic_set.di2.cycle;
+    if (cycleElapsedMs >= cycleSec * 1000UL) EndCycle();
   }
 
-  // Ароматизация — досчитываем секунды импульса CH1, выключаем по достижении нуля.
-  if (aromaRemainingSec > 0) {
-    aromaRemainingSec--;
-    if (aromaRemainingSec == 0) Peripherals_SetRelay(0, false); // CH1
+  // Вентилятор (см. fanPct выше). Во время цикла цель и темп берём из живых настроек каждый
+  // вызов — поменяли AO1.speed на странице, вентилятор плавно поедет к новой скорости.
+  if (mode != MODE_IDLE) {
+    uint8_t rampUpSec = mode == MODE_HEAT ? logic_set.di3.ramp_up : logic_set.di2.ramp_up;
+    fanTargetPct = logic_set.ao1.speed;
+    fanRatePctPerSec = (float)logic_set.ao1.speed / (rampUpSec ? rampUpSec : 1);
+  }
+  float stepPct = fanRatePctPerSec * dtMs / 1000.0f;
+  if (fanPct < fanTargetPct) {
+    fanPct = fminf(fanPct + stepPct, fanTargetPct);
+  } else if (fanPct > fanTargetPct) {
+    fanPct = fmaxf(fanPct - stepPct, fanTargetPct);
+  }
+  uint8_t pwm = (uint8_t)(fanPct * 255.0f / 100.0f + 0.5f);
+  if (pwm != Peripherals_GetAnalogOut()) Peripherals_SetAnalogOut(pwm);
+
+  if (mode == MODE_IDLE) {
+    LightProgram_Service(ch5Program, logic_set.ch5.imp, logic_set.ch5.gap, logic_set.ch5.count, logic_set.ch5.pause);
+    LightProgram_Service(ch6Program, logic_set.ch6.imp, 0, 1, logic_set.ch6.pause);
   }
 
-  // Разгон вентилятора — 3 фазы, в каждой мощность линейно растёт от значения предыдущей
-  // фазы до своей цели за свою длительность в секундах (ровно столько раз сюда зайдём).
-  if (fanPhase != 0) {
-    fanPhaseElapsedSec++;
-    bool phaseDone = fanPhaseElapsedSec >= fanPhaseDurationSec;
-    uint8_t phasePct;
-    if (phaseDone) {
-      phasePct = fanPhaseTargetPct;
-    } else {
-      int16_t deltaPct = (int16_t)fanPhaseTargetPct - (int16_t)fanPhaseStartPct;
-      phasePct = fanPhaseStartPct + (int16_t)(deltaPct * (int16_t)fanPhaseElapsedSec / (int16_t)fanPhaseDurationSec);
-    }
-
-    // AO1.max — ограничение выхода в процентах ОТ процента (см. комментарий у настройки в
-    // settings.h): если фаза требует, скажем, 50% мощности, а AO1.max тоже 50%, реальный
-    // выход должен быть на 50% от 50%, т.е. на 25%. DI6_LEVELS[di6LevelIndex] — ручная
-    // надстройка НАД этим (ещё один процент от процента), которую можно менять кнопкой DI6
-    // прямо во время цикла (см. ApplyFanOutputPercent).
-    ApplyFanOutputPercent(phasePct);
-
-    if (phaseDone) { // переходим к следующей фазе (или завершаем разгон)
-      fanPhaseStartPct = fanPhaseTargetPct;
-      fanPhaseElapsedSec = 0;
-      if (fanPhase == 1) {
-        fanPhase = 2;
-        fanPhaseTargetPct = logic_set.ao1.f2_pwr;
-        fanPhaseDurationSec = logic_set.ao1.f2_time;
-      } else if (fanPhase == 2) {
-        fanPhase = 3;
-        fanPhaseTargetPct = logic_set.ao1.f3_pwr;
-        fanPhaseDurationSec = logic_set.ao1.f3_time;
-      } else {
-        fanPhase = 0; // разгон завершён — выход остаётся на мощности 3-й фазы
-      }
-    }
-  } else if (cycleActive) {
-    // Разгон уже закончился, но цикл ещё идёт — держим устоявшуюся мощность
-    // (fanPhaseTargetPct = цель последней, 3-й фазы) и продолжаем накладывать на неё DI6,
-    // если его подвигали уже ПОСЛЕ разгона. Без этой ветки DI6 после разгона было бы
-    // не к чему применить — ровно тот баг, который сейчас чиним.
-    ApplyFanOutputPercent(fanPhaseTargetPct);
-  }
-
-  // Плавное гашение вентилятора после остановки цикла (StopCycle) — линейно от значения
-  // ШИМ, которое было на момент остановки, до 0 за logic_set.ao1.delay_off секунд.
-  if (fanRampDownActive) {
-    fanRampDownElapsedSec++;
-    if (fanRampDownElapsedSec >= fanRampDownDurationSec) {
-      Peripherals_SetAnalogOut(0);
-      fanRampDownActive = false;
-    } else {
-      uint8_t pwm = fanRampDownStartPwm -
-                    (uint16_t)fanRampDownStartPwm * fanRampDownElapsedSec / fanRampDownDurationSec;
-      Peripherals_SetAnalogOut(pwm);
-    }
-  }
-
-  // Твой алгоритм — начиная отсюда.
+  bool idle = mode == MODE_IDLE;
+  bool heat = mode == MODE_HEAT;
+  uint8_t mask = 0;
+  if (heat && cycleElapsedMs < logic_set.ch1.imp * 1000UL) mask |= 1 << 0; // CH1 аромат
+  if (mode == MODE_NO_HEAT) mask |= 1 << 1;                                  // CH2
+  if (heat) mask |= 1 << 2;                                                  // CH3
+  if (idle) mask |= 1 << 3;                                                  // CH4 свет А
+  if (heat || (idle && ch5Program.on)) mask |= 1 << 4;                       // CH5 свет Б
+  if (heat || (idle && ch6Program.on)) mask |= 1 << 5;                       // CH6 свет В
+  if (heat) mask |= 1 << 6;                                                  // CH7 нагрев
+  if (fanTargetPct > 0 || fanPct > 0) mask |= 1 << 7;                        // CH8 вентилятор
+  WriteRelays(mask);
 }

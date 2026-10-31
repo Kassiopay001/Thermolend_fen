@@ -224,8 +224,8 @@ static void handleInfoGet(Client &client) {
   json += ",\"minor\":" + String(fw_ver[1]);
   json += ",\"patch\":" + String(fw_ver[2]);
   json += ",\"minutes\":" + String(Logic_GetRuntimeMinutes());
-  json += ",\"fullCycles\":" + String(Logic_GetFullCycles());
-  json += ",\"partialCycles\":" + String(Logic_GetPartialCycles());
+  json += ",\"noHeatCycles\":" + String(Logic_GetNoHeatCycles());
+  json += ",\"heatCycles\":" + String(Logic_GetHeatCycles());
   // Ethernet MAC фиксированный (ETH_MAC_ADDR), IP реальный только если линк поднят —
   // но отдаём как есть, страница сама решает, показывать ли по ethLinkUp/ethAvailable.
   json += ",\"ethAvailable\":" + String(Peripherals_EthAvailable() ? "true" : "false");
@@ -242,21 +242,29 @@ static void handleInfoGet(Client &client) {
   sendResponse(client, 200, "application/json", json);
 }
 
+// Времена подсветки хранятся в x0.1 сек (см. settings.h), а на странице и в API — в секундах
+// с одним знаком после точки ("0.5"), чтобы страница работала с ними как с обычными числами.
+static String tenthsToSecStr(uint16_t tenths) {
+  return String(tenths / 10) + "." + String(tenths % 10);
+}
+
 static void handleAlgorithmSettingsGet(Client &client) {
   // Читаем из живого logic_set (logic.cpp), а не из NVS — он всегда синхронен
   // с последним сохранённым значением, лишний раз лезть во флеш незачем.
-  String json = "{\"di7On\":" + String(logic_set.di7.on ? "true" : "false") +
-                ",\"presenceOffDelaySec\":" + String(logic_set.di7.delay_off) +
-                ",\"di2Cycle\":" + String(logic_set.di2.cycle) +
+  String json = "{\"di2Cycle\":" + String(logic_set.di2.cycle) +
+                ",\"di2RampUp\":" + String(logic_set.di2.ramp_up) +
+                ",\"di2RampDown\":" + String(logic_set.di2.ramp_down) +
+                ",\"di3Cycle\":" + String(logic_set.di3.cycle) +
+                ",\"di3RampUp\":" + String(logic_set.di3.ramp_up) +
+                ",\"di3RampDown\":" + String(logic_set.di3.ramp_down) +
                 ",\"ch1Imp\":" + String(logic_set.ch1.imp) +
-                ",\"ao1Max\":" + String(logic_set.ao1.max) +
-                ",\"ao1F1Time\":" + String(logic_set.ao1.f1_time) +
-                ",\"ao1F1Pwr\":" + String(logic_set.ao1.f1_pwr) +
-                ",\"ao1F2Time\":" + String(logic_set.ao1.f2_time) +
-                ",\"ao1F2Pwr\":" + String(logic_set.ao1.f2_pwr) +
-                ",\"ao1F3Time\":" + String(logic_set.ao1.f3_time) +
-                ",\"ao1F3Pwr\":" + String(logic_set.ao1.f3_pwr) +
-                ",\"ao1DelayOff\":" + String(logic_set.ao1.delay_off) + "}";
+                ",\"ch5Imp\":" + tenthsToSecStr(logic_set.ch5.imp) +
+                ",\"ch5Gap\":" + tenthsToSecStr(logic_set.ch5.gap) +
+                ",\"ch5Count\":" + String(logic_set.ch5.count) +
+                ",\"ch5Pause\":" + tenthsToSecStr(logic_set.ch5.pause) +
+                ",\"ch6Imp\":" + tenthsToSecStr(logic_set.ch6.imp) +
+                ",\"ch6Pause\":" + tenthsToSecStr(logic_set.ch6.pause) +
+                ",\"ao1Speed\":" + String(logic_set.ao1.speed) + "}";
   sendResponse(client, 200, "application/json", json);
 }
 
@@ -268,21 +276,32 @@ static int clampFormInt(const String &body, const char *field, int minValue, int
   return value;
 }
 
+// Секунды с десятыми из формы ("0.5") -> x0.1 сек, обрезанные в [minTenths, maxTenths].
+static int clampFormTenths(const String &body, const char *field, int minTenths, int maxTenths) {
+  int value = (int)lroundf(getFormField(body, field).toFloat() * 10.0f);
+  if (value < minTenths) value = minTenths;
+  if (value > maxTenths) value = maxTenths;
+  return value;
+}
+
 static void handleAlgorithmSettingsPost(Client &client, const String &body) {
   // Применяем сразу в работающей логике и сохраняем весь блок настроек в NVS разом —
   // без перезагрузки, в отличие от handleSettingsPost() (там AP/Wi-Fi требуют рестарта).
-  logic_set.di7.on = getFormField(body, "di7_on") == "1";
-  logic_set.di7.delay_off = (uint16_t)clampFormInt(body, "presence_off_delay_sec", 1, 300);
+  // Диапазоны — те же, что в комментариях AlgorithmSettings (settings.h) и на странице.
   logic_set.di2.cycle = (uint16_t)clampFormInt(body, "di2_cycle", 60, 300);
+  logic_set.di2.ramp_up = (uint8_t)clampFormInt(body, "di2_ramp_up", 1, 60);
+  logic_set.di2.ramp_down = (uint8_t)clampFormInt(body, "di2_ramp_down", 1, 120);
+  logic_set.di3.cycle = (uint16_t)clampFormInt(body, "di3_cycle", 60, 300);
+  logic_set.di3.ramp_up = (uint8_t)clampFormInt(body, "di3_ramp_up", 1, 60);
+  logic_set.di3.ramp_down = (uint8_t)clampFormInt(body, "di3_ramp_down", 1, 120);
   logic_set.ch1.imp = (uint8_t)clampFormInt(body, "ch1_imp", 0, 30);
-  logic_set.ao1.max = (uint8_t)clampFormInt(body, "ao1_max", 1, 100);
-  logic_set.ao1.f1_time = (uint8_t)clampFormInt(body, "ao1_f1_time", 1, 30);
-  logic_set.ao1.f1_pwr = (uint8_t)clampFormInt(body, "ao1_f1_pwr", 1, 100);
-  logic_set.ao1.f2_time = (uint8_t)clampFormInt(body, "ao1_f2_time", 1, 30);
-  logic_set.ao1.f2_pwr = (uint8_t)clampFormInt(body, "ao1_f2_pwr", 1, 100);
-  logic_set.ao1.f3_time = (uint8_t)clampFormInt(body, "ao1_f3_time", 1, 30);
-  logic_set.ao1.f3_pwr = (uint8_t)clampFormInt(body, "ao1_f3_pwr", 1, 100);
-  logic_set.ao1.delay_off = (uint8_t)clampFormInt(body, "ao1_delay_off", 1, 30);
+  logic_set.ch5.imp = (uint16_t)clampFormTenths(body, "ch5_imp", 1, 100);
+  logic_set.ch5.gap = (uint16_t)clampFormTenths(body, "ch5_gap", 1, 100);
+  logic_set.ch5.count = (uint8_t)clampFormInt(body, "ch5_count", 1, 10);
+  logic_set.ch5.pause = (uint16_t)clampFormTenths(body, "ch5_pause", 1, 600);
+  logic_set.ch6.imp = (uint16_t)clampFormTenths(body, "ch6_imp", 1, 600);
+  logic_set.ch6.pause = (uint16_t)clampFormTenths(body, "ch6_pause", 1, 1200);
+  logic_set.ao1.speed = (uint8_t)clampFormInt(body, "ao1_speed", 1, 100);
   Settings_SetAlgorithmSettings(logic_set);
 
   sendResponse(client, 200, "application/json", "{\"ok\":true}");
